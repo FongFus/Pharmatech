@@ -4,7 +4,7 @@
 
 The platform includes user role management, product browsing, cart and order processing, secure payments, and real-time AI chatbot support. It is built with **Django**, **React Native**, and **Firebase** for a responsive and intelligent healthcare experience.
 
----
+
 
 ## 🚀 Features
 
@@ -24,14 +24,14 @@ The platform includes user role management, product browsing, cart and order pro
 - **Product Approval**: Approve or reject new products submitted by distributors.
 - **System Analytics**: View platform metrics like visits, orders, and chatbot usage.
 
----
+
 
 ## 🤖 AI Integration
 
 - **Gemini 2.0 Flash**: Real-time explanations of medical terms and health guidance using a multimodal Transformer model with Chain-of-Thought reasoning.
 - **Multimodal Support**: Accepts both text and images (e.g., prescription scans) to provide rich and contextual responses.
 
----
+
 
 ## 🧱 Technology Stack
 
@@ -43,7 +43,7 @@ The platform includes user role management, product browsing, cart and order pro
 | **Realtime** | Firebase Realtime Database |
 | **Deployment** | Backend deployed via Docker on Onrender |
 
----
+
 
 ## 🧭 Architecture
 
@@ -53,7 +53,7 @@ Pharmatech follows a **3-tier architecture**:
 2. **Application Layer**: Django REST APIs with business logic and AI integration
 3. **Data Layer**: MySQL/PostgreSQL (structured data) + Firebase Realtime DB (real-time data)
 
----
+
 
 ## 📦 Usage Scenarios
 
@@ -74,6 +74,6 @@ Pharmatech follows a **3-tier architecture**:
 - Manage all users
 - View system reports and analytics
 
----
 
-> ⚠️ **Disclaimer**: The AI chatbot in Pharmatech is intended for informational purposes only and does not replace professional medical consultation.
+
+⚠️ **Disclaimer**: The AI chatbot in Pharmatech is intended for informational purposes only and does not replace professional medical consultation.
