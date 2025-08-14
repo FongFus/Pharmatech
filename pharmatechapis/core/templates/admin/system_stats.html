@@ -1,0 +1,190 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<h1>System Statistics</h1>
+
+<!-- Thêm Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+
+<!-- Products by Category -->
+<h2>Products by Category</h2>
+<button onclick="sortData('product-stats-table', 1, 'number')">Sort by Count</button>
+<table id="product-stats-table">
+    <tr><th>Category</th><th>Count</th></tr>
+    {% for stat in product_stats %}
+    <tr><td>{{ stat.category }}</td><td>{{ stat.product_count }}</td></tr>
+    {% endfor %}
+</table>
+<canvas id="productChart" width="400" height="200"></canvas>
+
+<!-- Orders by Status -->
+<h2>Orders by Status</h2>
+<button onclick="sortData('order-stats-table', 1, 'number')">Sort by Count</button>
+<table id="order-stats-table">
+    <tr><th>Status</th><th>Count</th></tr>
+    {% for stat in order_stats %}
+    <tr><td>{{ stat.status }}</td><td>{{ stat.order_count }}</td></tr>
+    {% endfor %}
+</table>
+<canvas id="orderChart" width="400" height="200"></canvas>
+
+<!-- Trending Categories -->
+<h2>Trending Categories</h2>
+<table id="trending-categories-table">
+    <tr><th>Category</th><th>Total Sold</th></tr>
+    {% for category in trending_categories %}
+    <tr><td>{{ category.product__category }}</td><td>{{ category.total_sold }}</td></tr>
+    {% endfor %}
+</table>
+<canvas id="trendingCategoriesChart" width="400" height="200"></canvas>
+
+<!-- Trending Products -->
+<h2>Trending Products</h2>
+<table id="trending-products-table">
+    <tr><th>Product</th><th>Total Sold</th></tr>
+    {% for product in trending_products %}
+    <tr><td>{{ product.product__name }}</td><td>{{ product.total_sold }}</td></tr>
+    {% endfor %}
+</table>
+<canvas id="trendingProductsChart" width="400" height="200"></canvas>
+
+<!-- Total Revenue -->
+<h2>Total Revenue</h2>
+<p>{{ total_revenue }} VND</p>
+
+<!-- Total Interactions -->
+<h2>Total Interactions</h2>
+<p>{{ total_interactions }} interactions</p>
+
+<!-- JavaScript để vẽ biểu đồ và sort -->
+<script>
+    // Hàm sắp xếp bảng
+    function sortData(tableId, column, type) {
+        const table = document.getElementById(tableId);
+        const rows = Array.from(table.rows).slice(1); // Bỏ qua header
+        rows.sort((a, b) => {
+            let aValue = a.cells[column].innerText;
+            let bValue = b.cells[column].innerText;
+            if (type === 'number') {
+                return parseInt(bValue) - parseInt(aValue);
+            }
+            return aValue.localeCompare(bValue);
+        });
+        // Xóa các dòng hiện tại
+        while (table.rows.length > 1) table.deleteRow(1);
+        // Thêm lại các dòng đã sắp xếp
+        rows.forEach(row => table.appendChild(row));
+    }
+
+    // Biểu đồ sản phẩm theo danh mục
+    const productChart = new Chart(document.getElementById('productChart'), {
+        type: 'bar',
+        data: {
+            labels: [
+                {% for stat in product_stats %}
+                "{{ stat.category|escapejs }}"{% if not forloop.last %},{% endif %}
+                {% endfor %}
+            ],
+            datasets: [{
+                label: 'Products by Category',
+                data: [
+                    {% for stat in product_stats %}
+                    {{ stat.product_count }}{% if not forloop.last %},{% endif %}
+                    {% endfor %}
+                ],
+                backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                borderColor: 'rgba(75, 192, 192, 1)',
+                borderWidth: 1
+            }]
+        },
+        options: {
+            scales: {
+                y: { beginAtZero: true }
+            }
+        }
+    });
+
+    // Biểu đồ đơn hàng theo trạng thái
+    const orderChart = new Chart(document.getElementById('orderChart'), {
+        type: 'bar',
+        data: {
+            labels: [
+                {% for stat in order_stats %}
+                "{{ stat.status|escapejs }}"{% if not forloop.last %},{% endif %}
+                {% endfor %}
+            ],
+            datasets: [{
+                label: 'Orders by Status',
+                data: [
+                    {% for stat in order_stats %}
+                    {{ stat.order_count }}{% if not forloop.last %},{% endif %}
+                    {% endfor %}
+                ],
+                backgroundColor: 'rgba(153, 102, 255, 0.2)',
+                borderColor: 'rgba(153, 102, 255, 1)',
+                borderWidth: 1
+            }]
+        },
+        options: {
+            scales: {
+                y: { beginAtZero: true }
+            }
+        }
+    });
+
+    // Biểu đồ danh mục bán chạy
+    const trendingCategoriesChart = new Chart(document.getElementById('trendingCategoriesChart'), {
+        type: 'bar',
+        data: {
+            labels: [
+                {% for category in trending_categories %}
+                "{{ category.product__category|escapejs }}"{% if not forloop.last %},{% endif %}
+                {% endfor %}
+            ],
+            datasets: [{
+                label: 'Trending Categories',
+                data: [
+                    {% for category in trending_categories %}
+                    {{ category.total_sold }}{% if not forloop.last %},{% endif %}
+                    {% endfor %}
+                ],
+                backgroundColor: 'rgba(255, 159, 64, 0.2)',
+                borderColor: 'rgba(255, 159, 64, 1)',
+                borderWidth: 1
+            }]
+        },
+        options: {
+            scales: {
+                y: { beginAtZero: true }
+            }
+        }
+    });
+
+    // Biểu đồ sản phẩm bán chạy
+    const trendingProductsChart = new Chart(document.getElementById('trendingProductsChart'), {
+        type: 'bar',
+        data: {
+            labels: [
+                {% for product in trending_products %}
+                "{{ product.product__name|escapejs }}"{% if not forloop.last %},{% endif %}
+                {% endfor %}
+            ],
+            datasets: [{
+                label: 'Trending Products',
+                data: [
+                    {% for product in trending_products %}
+                    {{ product.total_sold }}{% if not forloop.last %},{% endif %}
+                    {% endfor %}
+                ],
+                backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                borderColor: 'rgba(54, 162, 235, 1)',
+                borderWidth: 1
+            }]
+        },
+        options: {
+            scales: {
+                y: { beginAtZero: true }
+            }
+        }
+    });
+</script>
+{% endblock %}

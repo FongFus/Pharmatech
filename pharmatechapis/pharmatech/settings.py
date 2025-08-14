@@ -58,7 +58,11 @@ MIDDLEWARE = [
 ]
 
 # CORS settings
-CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOWED_ORIGINS = [
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+]
 CORS_ALLOW_METHODS = [
     'DELETE',
     'GET',
@@ -87,14 +91,21 @@ OAUTH2_PROVIDER = {
     },
     'DEFAULT_SCOPES': ['read', 'write'],
     'OAUTH2_BACKEND_CLASS': 'oauth2_provider.oauth2_backends.JSONOAuthLibCore',
+    'ACCESS_TOKEN_EXPIRE_SECONDS': 3600,  # 1 hour
+    'REFRESH_TOKEN_EXPIRE_SECONDS': 1209600,  # 14 days
 }
 
 # REST Framework settings
 REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': (
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'core.authentication.CustomOAuth2Authentication',
         'oauth2_provider.contrib.rest_framework.OAuth2Authentication',
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
-    ),
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+    'DEFAULT_PAGINATION_CLASS': 'core.paginators.ItemPaginator',
+    'PAGE_SIZE': 10,
     'DEFAULT_RENDERER_CLASSES': [
         'rest_framework.renderers.JSONRenderer',
     ],
@@ -105,23 +116,49 @@ REST_FRAMEWORK = {
     ],
 }
 
+# Authentication backends
+AUTHENTICATION_BACKENDS = [
+    'core.authentication.EmailOrUsernameModelBackend',
+    'django.contrib.auth.backends.ModelBackend',
+]
+
 # Cloudinary configuration
 cloudinary.config(
     cloud_name='dncgine9e',
     api_key='257557947612624',
-    api_secret='88EDQ7-Ltwzn1oaI4tT_UIb_bWI',
+    api_secret='88EDQ7-Ltwzn1oaI4tT_UIb_bWI',  # Cảnh báo: Chuyển sang .env khi triển khai
     secure=True
 )
 
+# Gemini API configuration
+GEMINI_API_KEY = 'your-gemini-api-key'  # Thay bằng API key thực tế, cảnh báo: Chuyển sang .env khi triển khai
+
+# Firebase configuration for Realtime Database
+FIREBASE_CONFIG = {
+    'apiKey': 'your-api-key',  # Thay bằng API key thực tế, cảnh báo: Chuyển sang .env khi triển khai
+    'authDomain': 'pharmatech-app.firebaseapp.com',
+    'databaseURL': 'https://pharmatech-app.firebaseio.com',
+    'projectId': 'pharmatech-app',
+    'storageBucket': 'pharmatech-app.appspot.com',
+    'messagingSenderId': 'your-messaging-sender-id',  # Thay bằng messagingSenderId thực tế, cảnh báo: Chuyển sang .env khi triển khai
+    'appId': 'your-app-id'  # Thay bằng appId thực tế, cảnh báo: Chuyển sang .env khi triển khai
+}
+
+# VNPay configuration
+VNPAY_TMN_CODE = 'GUPETCYO'  # Cảnh báo: Chuyển sang .env khi triển khai
+VNPAY_HASH_SECRET = 'E2G0Y153XRTW37LVRKW8DJ1TGEQ9RK6I'  # Cảnh báo: Chuyển sang .env khi triển khai
+VNPAY_URL = 'https://sandbox.vnpayment.vn/paymentv2/vpcpay.html'
+VNPAY_RETURN_URL = 'https://your-app-domain.com/vnpay/redirect?from=app'
+
 DEFAULT_FILE_STORAGE = 'cloudinary_storage.storage.MediaCloudinaryStorage'
-STATICFILES_STORAGE = 'cloudinary_storage.storage.StaticCloudinaryStorage'
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage' if not DEBUG else 'django.contrib.staticfiles.storage.StaticFilesStorage'
 
 # CKEditor settings
-CKEDITOR_UPLOAD_PATH = "uploads/"
+CKEDITOR_UPLOAD_PATH = "Uploads/"
 
 # Firebase configuration for AI chatbot
 SERVICE_ACCOUNT_PATH = os.path.join(
-    os.path.dirname(__file__), '..', 'core', 'pharmatech-firebase-adminsdk.json'
+    BASE_DIR, 'core', 'pharmatech-firebase-adminsdk.json'
 )
 
 # Email configuration
@@ -129,8 +166,8 @@ EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = 'smtp.gmail.com'
 EMAIL_PORT = 587
 EMAIL_USE_TLS = True
-EMAIL_HOST_USER = 'your-email@gmail.com'
-EMAIL_HOST_PASSWORD = 'your-app-password'
+EMAIL_HOST_USER = 'your-email@gmail.com'  # Thay bằng email thực tế, cảnh báo: Chuyển sang .env khi triển khai
+EMAIL_HOST_PASSWORD = 'your-app-password'  # Thay bằng app password thực tế, cảnh báo: Chuyển sang .env khi triển khai
 DEFAULT_FROM_EMAIL = 'PharmaTech <no-reply@pharmatech.com>'
 
 # OAuth2 Client credentials (to be replaced later)
@@ -142,7 +179,7 @@ ROOT_URLCONF = 'pharmatech.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [os.path.join(BASE_DIR, 'templates')],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -163,7 +200,7 @@ DATABASES = {
         'NAME': 'pharmadb',
         'USER': 'root',
         'PASSWORD': 'Admin@123',
-        'HOST': '',  # mặc định localhost
+        'HOST': 'localhost',  # Chỉ rõ localhost
     }
 }
 
@@ -191,17 +228,14 @@ AUTH_PASSWORD_VALIDATORS = [
 
 # Internationalization
 LANGUAGE_CODE = 'en-us'
-TIME_ZONE = 'UTC'
+TIME_ZONE = 'Asia/Ho_Chi_Minh'  # Phù hợp với Việt Nam
 USE_I18N = True
 USE_TZ = True
 
 # Static files (CSS, JavaScript, Images)
 STATIC_URL = 'static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
-
-# Enable WhiteNoise for static file serving in production
-if not DEBUG:
-    STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+STATICFILES_DIRS = [os.path.join(BASE_DIR, 'static')]
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
@@ -217,7 +251,7 @@ LOGGING = {
     },
     'root': {
         'handlers': ['console'],
-        'level': 'WARNING',  # Giảm mức log tổng thể
+        'level': 'WARNING',
     },
     'loggers': {
         'django': {
@@ -230,10 +264,14 @@ LOGGING = {
             'level': 'ERROR',
             'propagate': False,
         },
-        'watchfiles': {
+        'oauth2_provider': {
             'handlers': ['console'],
-            'level': 'WARNING',  # Hoặc 'ERROR' để tắt hoàn toàn
+            'level': 'DEBUG',  # Debug OAuth2 issues
             'propagate': False,
         },
     },
 }
+
+# Ghi chú: Khi triển khai production, chuyển các cấu hình nhạy cảm (Cloudinary, Firebase, Gemini, VNPay, Email) sang .env
+# Sử dụng python-decouple với các biến: CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET,
+# FIREBASE_API_KEY, GEMINI_API_KEY, VNPAY_TMN_CODE, VNPAY_HASH_SECRET, EMAIL_HOST_USER, EMAIL_HOST_PASSWORD
