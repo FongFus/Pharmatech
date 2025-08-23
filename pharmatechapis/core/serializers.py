@@ -3,7 +3,11 @@ from rest_framework.serializers import ModelSerializer
 from django.utils import timezone
 from decimal import Decimal
 from cloudinary.utils import cloudinary_url
-from .models import User, Product, Cart, CartItem, Order, OrderItem, Payment, ChatMessage, DeviceToken
+from .models import User, Product, Cart, CartItem, Order, OrderItem, Payment, DeviceToken, Category, Inventory
+from django.contrib.auth import get_user_model
+from django.contrib.auth.tokens import default_token_generator
+from django.utils.http import urlsafe_base64_decode
+from django.utils.encoding import force_str
 
 # Serializer cho User
 class UserSerializer(ModelSerializer):
@@ -28,6 +32,10 @@ class UserSerializer(ModelSerializer):
             role=validated_data.get('role', 'customer'),
             avatar=avatar
         )
+        from .utils import create_firebase_user
+        firebase_user = create_firebase_user(user.email, password, str(user.id), user.role)
+        if not firebase_user.get('success'):
+            raise serializers.ValidationError(firebase_user['message'])
         return user
 
     def update(self, instance, validated_data):
@@ -92,6 +100,28 @@ class ProductSerializer(ModelSerializer):
         data['image'] = cloudinary_url(instance.image.public_id)[0] if instance.image else ''
         data['price'] = str(instance.price)
         return data
+
+# Serializer cho Inventory
+class InventorySerializer(ModelSerializer):
+    product = ProductSerializer(read_only=True)
+    product_id = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all(), source='product', write_only=True)
+
+    class Meta:
+        model = Inventory
+        fields = ['id', 'distributor', 'product', 'product_id', 'quantity', 'last_updated']
+        read_only_fields = ['id', 'distributor', 'last_updated']
+
+    def validate(self, data):
+        user = self.context['request'].user
+        if user.role != 'distributor':
+            raise serializers.ValidationError("Chỉ nhà phân phối mới có thể quản lý kho.")
+        if data['product'].distributor != user:
+            raise serializers.ValidationError("Bạn chỉ có thể quản lý kho của sản phẩm do bạn sở hữu.")
+        return data
+
+    def create(self, validated_data):
+        validated_data['distributor'] = self.context['request'].user
+        return Inventory.objects.create(**validated_data)
 
 # Serializer cho Cart
 class CartSerializer(ModelSerializer):
@@ -195,19 +225,17 @@ class PaymentSerializer(ModelSerializer):
         data['amount'] = str(instance.amount)
         return data
 
-# Serializer cho ChatMessage
-class ChatMessageSerializer(ModelSerializer):
-    user = serializers.ReadOnlyField(source='user.username')
-
+# Serializer cho AdminProductApproval
+class AdminProductApprovalSerializer(serializers.ModelSerializer):
     class Meta:
-        model = ChatMessage
-        fields = ['id', 'user', 'message', 'response', 'conversation_id', 'created_at']
-        read_only_fields = ['id', 'user', 'response', 'conversation_id', 'created_at']
+        model = Product
+        fields = ['id', 'is_approved']
+        read_only_fields = ['id']
 
     def validate(self, data):
         user = self.context['request'].user
-        if user.role != 'customer':
-            raise serializers.ValidationError("Chỉ khách hàng mới có thể gửi tin nhắn đến chatbot.")
+        if user.role != 'admin':
+            raise serializers.ValidationError("Chỉ quản trị viên mới có thể duyệt sản phẩm.")
         return data
 
 # Serializer cho DeviceToken
@@ -217,20 +245,17 @@ class DeviceTokenSerializer(ModelSerializer):
         fields = ['id', 'user', 'token', 'device_type', 'created_at', 'updated_at']
         read_only_fields = ['id', 'user', 'created_at', 'updated_at']
 
-    def validate_token(self, value):
-        if not value:
-            raise serializers.ValidationError("Token thiết bị không được để trống.")
-        return value
-
-# Serializer cho Admin để duyệt sản phẩm
-class AdminProductApprovalSerializer(ModelSerializer):
+# Serializer cho Category
+class CategorySerializer(ModelSerializer):
     class Meta:
-        model = Product
-        fields = ['id', 'name', 'distributor', 'is_approved']
-        read_only_fields = ['id', 'name', 'distributor']
+        model = Category
+        fields = '__all__'
 
-    def validate(self, data):
-        user = self.context['request'].user
-        if user.role != 'admin':
-            raise serializers.ValidationError("Chỉ quản trị viên mới có thể duyệt sản phẩm.")
-        return data
+# Serializer cho Password Reset
+class PasswordResetSerializer(serializers.Serializer):
+    new_password = serializers.CharField(write_only=True, required=True)
+
+    def validate_new_password(self, value):
+        if len(value) < 8:
+            raise serializers.ValidationError("Mật khẩu phải có ít nhất 8 ký tự.")
+        return value

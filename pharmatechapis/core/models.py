@@ -57,11 +57,18 @@ class User(AbstractBaseUser, PermissionsMixin):
     def __str__(self):
         return self.username or self.email
 
+class Category(models.Model):
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True, null=True)
+
+    def __str__(self):
+        return self.name
+
 class Product(models.Model):
     distributor = models.ForeignKey(User, on_delete=models.CASCADE, related_name='products', limit_choices_to={'role': 'distributor'})
     name = models.CharField(max_length=100)
     description = models.TextField()
-    category = models.CharField(max_length=50)
+    category = models.ForeignKey(Category, on_delete=models.SET_NULL, null=True, blank=True)
     price = models.DecimalField(max_digits=10, decimal_places=2)
     stock = models.PositiveIntegerField()
     image = CloudinaryField('image', null=True, blank=True)
@@ -74,6 +81,19 @@ class Product(models.Model):
 
     def __str__(self):
         return self.name
+
+class Inventory(models.Model):
+    distributor = models.ForeignKey(User, on_delete=models.CASCADE, related_name='inventory', limit_choices_to={'role': 'distributor'})
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='inventory')
+    quantity = models.PositiveIntegerField()
+    last_updated = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=['distributor', 'product'])]
+        unique_together = ('distributor', 'product')
+
+    def __str__(self):
+        return f"{self.product.name} - {self.quantity}"
 
 class Cart(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='carts', limit_choices_to={'role': 'customer'})
@@ -127,10 +147,11 @@ class Payment(models.Model):
     order = models.OneToOneField(Order, on_delete=models.CASCADE)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='payments')
     amount = models.DecimalField(max_digits=10, decimal_places=2)
-    payment_method = models.CharField(max_length=20, choices=[('momo', 'MoMo'), ('vnpay', 'VNPay'), ('bank', 'Bank')], default='momo')
-    status = models.BooleanField(default=False)
+    payment_method = models.CharField(max_length=20, choices=[('vnpay', 'VNPay')], default='vnpay')
+    status = models.CharField(max_length=20, choices=[('pending', 'Pending'), ('completed', 'Completed'), ('refunded', 'Refunded')], default='pending')
     transaction_id = models.CharField(max_length=50, null=True, blank=True)
     paid_at = models.DateTimeField(null=True, blank=True)
+    refunded_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -138,20 +159,6 @@ class Payment(models.Model):
 
     def __str__(self):
         return f"Payment for Order {self.order.order_code}"
-
-class ChatMessage(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_messages')
-    message = models.TextField()
-    response = models.TextField(null=True, blank=True)
-    conversation_id = models.CharField(max_length=50, null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        indexes = [models.Index(fields=['user', 'created_at'])]
-
-    def __str__(self):
-        return f"Message from {self.user.username}"
-
 class DeviceToken(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     token = models.CharField(max_length=200)

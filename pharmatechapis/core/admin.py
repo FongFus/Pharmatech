@@ -2,8 +2,9 @@ from django.contrib import admin
 from django.shortcuts import render
 from django.urls import path
 from django.template.response import TemplateResponse
-from .models import User, Product, Cart, CartItem, Order, OrderItem, Payment, ChatMessage, DeviceToken
+from .models import User, Product, Cart, CartItem, Order, OrderItem, Payment, DeviceToken, Category
 from django.db.models import Count, Sum
+from oauth2_provider.models import Application
 
 
 class PharmaTechAdminSite(admin.AdminSite):
@@ -24,7 +25,7 @@ class PharmaTechAdminSite(admin.AdminSite):
         # Thống kê đơn hàng theo trạng thái
         order_stats = Order.objects.values('status').annotate(order_count=Count('id')).order_by('-order_count')
         # Tổng doanh thu
-        revenue_stats = Payment.objects.filter(status=True).aggregate(total_revenue=Sum('amount'))['total_revenue'] or 0
+        revenue_stats = Payment.objects.filter(status='completed').aggregate(total_revenue=Sum('amount'))['total_revenue'] or 0
         # Tổng số tương tác
         total_interactions = ChatMessage.objects.count()
         # Danh mục bán chạy (dựa trên số lượng bán trong OrderItem)
@@ -41,8 +42,15 @@ class PharmaTechAdminSite(admin.AdminSite):
             'trending_products': trending_products,
         })
 
+# Tùy chỉnh giao diện quản trị cho Application
+class ApplicationAdmin(admin.ModelAdmin):
+    list_display = ('name', 'client_id', 'client_type', 'authorization_grant_type')
+    search_fields = ('name', 'client_id')
+    list_filter = ('client_type', 'authorization_grant_type')
+
 admin_site = PharmaTechAdminSite(name='pharmatech_admin')
 
+# Đăng ký các mô hình hiện có
 admin_site.register(User)
 admin_site.register(Product)
 admin_site.register(Cart)
@@ -50,5 +58,8 @@ admin_site.register(CartItem)
 admin_site.register(Order)
 admin_site.register(OrderItem)
 admin_site.register(Payment)
-admin_site.register(ChatMessage)
 admin_site.register(DeviceToken)
+admin_site.register(Category)
+
+# Đăng ký mô hình Application của oauth2_provider
+admin_site.register(Application, ApplicationAdmin)

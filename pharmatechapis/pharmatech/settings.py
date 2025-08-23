@@ -14,12 +14,13 @@ from pathlib import Path
 import os
 import pymysql
 import cloudinary
+from decouple import config
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-u01b#wqpcprzf&9!iy@i)@=#d52)w@#t1z536j)$$9i@d+zjlp'
+SECRET_KEY = config('SECRET_KEY', default='django-insecure-u01b#wqpcprzf&9!iy@i)@=#d52)w@#t1z536j)$$9i@d+zjlp')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
@@ -28,6 +29,7 @@ ALLOWED_HOSTS = ['*']
 
 # Application definition
 INSTALLED_APPS = [
+    'daphne',  # Thêm Daphne cho WebSocket
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -43,6 +45,7 @@ INSTALLED_APPS = [
     'ckeditor_uploader',
     'cloudinary_storage',
     'cloudinary',
+    'channels',  # Thêm Django Channels
 ]
 
 MIDDLEWARE = [
@@ -55,6 +58,8 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'core.middleware.RequestLoggingMiddleware',
+    'core.middleware.RoleBasedAccessMiddleware',
 ]
 
 # CORS settings
@@ -82,6 +87,20 @@ CORS_ALLOW_HEADERS = [
     'x-csrftoken',
     'x-requested-with',
 ]
+CORS_ALLOW_CREDENTIALS = True  # Cho phép gửi cookie/auth header
+
+# Swagger settings
+SWAGGER_SETTINGS = {
+    'SECURITY_DEFINITIONS': {
+        'Bearer': {
+            'type': 'apiKey',
+            'name': 'Authorization',
+            'in': 'header'
+        }
+    },
+    'USE_SESSION_AUTH': False,
+    'PERSIST_AUTH': True,
+}
 
 # OAuth2 Provider settings
 OAUTH2_PROVIDER = {
@@ -102,17 +121,26 @@ REST_FRAMEWORK = {
         'oauth2_provider.contrib.rest_framework.OAuth2Authentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.IsAuthenticated',
+        'rest_framework.permissions.AllowAny',  # Mặc định cho phép tất cả
     ],
     'DEFAULT_PAGINATION_CLASS': 'core.paginators.ItemPaginator',
     'PAGE_SIZE': 10,
     'DEFAULT_RENDERER_CLASSES': [
         'rest_framework.renderers.JSONRenderer',
+        'rest_framework.renderers.BrowsableAPIRenderer',
     ],
     'DEFAULT_PARSER_CLASSES': [
         'rest_framework.parsers.JSONParser',
         'rest_framework.parsers.MultiPartParser',
         'rest_framework.parsers.FormParser',
+    ],
+    'SERIALIZER_CLASSES': {
+        'password_reset': 'core.serializers.PasswordResetSerializer',
+    },
+    'DEFAULT_FILTER_BACKENDS': [
+        'django_filters.rest_framework.DjangoFilterBackend',
+        'rest_framework.filters.SearchFilter',
+        'rest_framework.filters.OrderingFilter',
     ],
 }
 
@@ -126,29 +154,68 @@ AUTHENTICATION_BACKENDS = [
 cloudinary.config(
     cloud_name='dncgine9e',
     api_key='257557947612624',
-    api_secret='88EDQ7-Ltwzn1oaI4tT_UIb_bWI',  # Cảnh báo: Chuyển sang .env khi triển khai
+    api_secret='88EDQ7-Ltwzn1oaI4tT_UIb_bWI',
     secure=True
 )
 
-# Gemini API configuration
-GEMINI_API_KEY = 'your-gemini-api-key'  # Thay bằng API key thực tế, cảnh báo: Chuyển sang .env khi triển khai
 
-# Firebase configuration for Realtime Database
+# Firebase configuration (cho Django sử dụng pyrebase)
 FIREBASE_CONFIG = {
-    'apiKey': 'your-api-key',  # Thay bằng API key thực tế, cảnh báo: Chuyển sang .env khi triển khai
-    'authDomain': 'pharmatech-app.firebaseapp.com',
-    'databaseURL': 'https://pharmatech-app.firebaseio.com',
-    'projectId': 'pharmatech-app',
-    'storageBucket': 'pharmatech-app.appspot.com',
-    'messagingSenderId': 'your-messaging-sender-id',  # Thay bằng messagingSenderId thực tế, cảnh báo: Chuyển sang .env khi triển khai
-    'appId': 'your-app-id'  # Thay bằng appId thực tế, cảnh báo: Chuyển sang .env khi triển khai
+    'apiKey': "AIzaSyANRU2j0uEUiT0WXKoXVQr_pK6w-skq_AU",
+    'authDomain': "pharmatech-b28f2.firebaseapp.com",
+    'databaseURL': "https://pharmatech-b28f2-default-rtdb.asia-southeast1.firebasedatabase.app/",
+    'projectId': "pharmatech-b28f2",
+    'storageBucket': "pharmatech-b28f2.firebasestorage.app",
+    'messagingSenderId': "857200339016",
+    'appId': "1:857200339016:web:16c6141a01c6ab1d13907d",
+    'measurementId': "G-CPH5ZS42JT"
 }
 
+# Firebase Admin SDK (cho Django gửi FCM và quản lý người dùng)
+FIREBASE_ADMIN_CREDENTIALS = BASE_DIR / 'credentials' / 'pharmatech-b28f2-firebase-adminsdk-fbsvc-067adae0d5.json'
+
+
+# Gemini API Key
+GEMINI_API_KEY = "AIzaSyACpnlYfPETVwTLUZq6iIcWOBJWzlzT-0Q"
+
+# Frontend URL for password reset links
+FRONTEND_URL = 'http://localhost:3000'
+
 # VNPay configuration
-VNPAY_TMN_CODE = 'GUPETCYO'  # Cảnh báo: Chuyển sang .env khi triển khai
-VNPAY_HASH_SECRET = 'E2G0Y153XRTW37LVRKW8DJ1TGEQ9RK6I'  # Cảnh báo: Chuyển sang .env khi triển khai
+VNPAY_TMN_CODE = "FW9RR63U"
+VNPAY_HASH_SECRET = "7DXR28DXIA3BO1HKZE2UAM6J8IULIQOP"
 VNPAY_URL = 'https://sandbox.vnpayment.vn/paymentv2/vpcpay.html'
-VNPAY_RETURN_URL = 'https://your-app-domain.com/vnpay/redirect?from=app'
+VNPAY_RETURN_URL = 'http://127.0.0.1:8000/vnpay/redirect/'  
+
+# Celery configuration
+CELERY_BROKER_URL = 'redis://127.0.0.1:6379/0'
+CELERY_RESULT_BACKEND = 'redis://127.0.0.1:6379/0'
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'Asia/Ho_Chi_Minh'
+
+# Cache configuration
+CACHES = {
+    'default': {
+        'BACKEND': 'django_redis.cache.RedisCache',
+        'LOCATION': 'redis://127.0.0.1:6379/1',
+        'OPTIONS': {
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+        }
+    }
+}
+
+# Django Channels configuration
+ASGI_APPLICATION = 'pharmatech.asgi.application'
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            'hosts': [("127.0.0.1", 6379)],
+        },
+    },
+}
 
 DEFAULT_FILE_STORAGE = 'cloudinary_storage.storage.MediaCloudinaryStorage'
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage' if not DEBUG else 'django.contrib.staticfiles.storage.StaticFilesStorage'
@@ -156,23 +223,22 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage' 
 # CKEditor settings
 CKEDITOR_UPLOAD_PATH = "Uploads/"
 
-# Firebase configuration for AI chatbot
-SERVICE_ACCOUNT_PATH = os.path.join(
-    BASE_DIR, 'core', 'pharmatech-firebase-adminsdk.json'
-)
-
 # Email configuration
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = 'smtp.gmail.com'
 EMAIL_PORT = 587
 EMAIL_USE_TLS = True
-EMAIL_HOST_USER = 'your-email@gmail.com'  # Thay bằng email thực tế, cảnh báo: Chuyển sang .env khi triển khai
-EMAIL_HOST_PASSWORD = 'your-app-password'  # Thay bằng app password thực tế, cảnh báo: Chuyển sang .env khi triển khai
+EMAIL_HOST_USER = "hyzamon@gmail.com"
+EMAIL_HOST_PASSWORD = "usui jibh vrgj awfo"
 DEFAULT_FROM_EMAIL = 'PharmaTech <no-reply@pharmatech.com>'
 
-# OAuth2 Client credentials (to be replaced later)
-CLIENT_ID = 'your-client-id'
-CLIENT_SECRET = 'your-client-secret'
+# OAuth2 Client credentials
+CLIENT_ID = "D1IuVFWNsB3LAkesfZu8IHAWQRCMZbmsy0qb4T0Q"
+CLIENT_SECRET = "0MqAl52q82xODtcctC8zWX9vWCYYw61nUcX0MDNObX0DkijauG7eBo8xbNah5sKxgU8L2k2ReR7KLuWGPGGdllKOEORQhgQPyfBYoKi9xfSGd4hKu3GCwp4QbH3yUXYC"
+
+# Media settings
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
 ROOT_URLCONF = 'pharmatech.urls'
 
@@ -200,7 +266,7 @@ DATABASES = {
         'NAME': 'pharmadb',
         'USER': 'root',
         'PASSWORD': 'Admin@123',
-        'HOST': 'localhost',  # Chỉ rõ localhost
+        'HOST': 'localhost',
     }
 }
 
@@ -228,11 +294,11 @@ AUTH_PASSWORD_VALIDATORS = [
 
 # Internationalization
 LANGUAGE_CODE = 'en-us'
-TIME_ZONE = 'Asia/Ho_Chi_Minh'  # Phù hợp với Việt Nam
+TIME_ZONE = 'Asia/Ho_Chi_Minh'
 USE_I18N = True
 USE_TZ = True
 
-# Static files (CSS, JavaScript, Images)
+# Static files
 STATIC_URL = 'static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 STATICFILES_DIRS = [os.path.join(BASE_DIR, 'static')]
@@ -240,7 +306,6 @@ STATICFILES_DIRS = [os.path.join(BASE_DIR, 'static')]
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# Logging configuration
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
@@ -251,27 +316,23 @@ LOGGING = {
     },
     'root': {
         'handlers': ['console'],
-        'level': 'WARNING',
+        'level': 'INFO',  # Đảm bảo log INFO trở lên được in ra
     },
     'loggers': {
+        'core': {  
+            'handlers': ['console'],
+            'level': 'INFO',  # Có thể đổi thành 'DEBUG' nếu muốn chi tiết hơn
+            'propagate': False,
+        },
         'django': {
             'handlers': ['console'],
             'level': 'INFO',
-            'propagate': True,
-        },
-        'django.request': {
-            'handlers': ['console'],
-            'level': 'ERROR',
             'propagate': False,
         },
         'oauth2_provider': {
             'handlers': ['console'],
-            'level': 'DEBUG',  # Debug OAuth2 issues
+            'level': 'DEBUG',
             'propagate': False,
         },
     },
 }
-
-# Ghi chú: Khi triển khai production, chuyển các cấu hình nhạy cảm (Cloudinary, Firebase, Gemini, VNPay, Email) sang .env
-# Sử dụng python-decouple với các biến: CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET,
-# FIREBASE_API_KEY, GEMINI_API_KEY, VNPAY_TMN_CODE, VNPAY_HASH_SECRET, EMAIL_HOST_USER, EMAIL_HOST_PASSWORD
