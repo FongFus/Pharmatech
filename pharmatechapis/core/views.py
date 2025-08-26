@@ -44,9 +44,11 @@ from rest_framework import serializers
 from decimal import Decimal
 import logging
 import socket
+from firebase_admin import db
+
 
 firebase = pyrebase.initialize_app(settings.FIREBASE_CONFIG)
-db = firebase.database()
+# db = firebase.database()
 
 logger = logging.getLogger(__name__)
 
@@ -733,7 +735,7 @@ class PaymentViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAP
             return Response({"error": result['message']}, status=status.HTTP_400_BAD_REQUEST)
 
 # Category ViewSet
-class CategoryViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.UpdateAPIView, generics.DestroyAPIView):
+class CategoryViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.UpdateAPIView, generics.DestroyAPIView, generics.RetrieveAPIView):
     authentication_classes = [CustomOAuth2Authentication]
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
@@ -794,9 +796,8 @@ class ChatMessageViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'], url_path='realtime-messages/(?P<conversation_id>[^/.]+)')
     def get_realtime_messages(self, request, conversation_id=None):
         try:
-            firebase = pyrebase.initialize_app(settings.FIREBASE_CONFIG)
-            db = firebase.database()
-            messages = db.child('chat_messages').child(conversation_id).get().val()
+            ref = db.reference(f'chat_messages/{conversation_id}')
+            messages = ref.get()
             if not messages:
                 return Response({'messages': []}, status=status.HTTP_200_OK)
             messages_list = [
@@ -810,9 +811,8 @@ class ChatMessageViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'], url_path='history')
     def get_history(self, request):
         try:
-            firebase = pyrebase.initialize_app(settings.FIREBASE_CONFIG)
-            db = firebase.database()
-            all_messages = db.child('chat_messages').get().val()
+            ref = db.reference('chat_messages')
+            all_messages = ref.get()
             history = []
             if all_messages:
                 for conv_id, messages in all_messages.items():

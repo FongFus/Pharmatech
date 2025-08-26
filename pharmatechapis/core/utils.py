@@ -1,16 +1,19 @@
 import pyrebase
 import requests
-from firebase_admin import auth as admin_auth, messaging, credentials
+from firebase_admin import auth as admin_auth, messaging, credentials, db
 from django.conf import settings
 from django.utils import timezone
 import firebase_admin
 import hashlib
 import hmac
 from urllib.parse import quote_plus
+from django.contrib.auth import get_user_model
 
 if not firebase_admin._apps:
     cred = credentials.Certificate(settings.FIREBASE_ADMIN_CREDENTIALS)
-    firebase_admin.initialize_app(cred)
+    firebase_admin.initialize_app(cred, {
+        'databaseURL': settings.FIREBASE_CONFIG['databaseURL']
+    })
 
 # Hàm gọi Gemini API
 GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent'
@@ -60,18 +63,26 @@ def create_firebase_user(email, password, user_id, role):
     except Exception as e:
         return {'success': False, 'message': f"Lỗi khi tạo người dùng Firebase: {str(e)}"}
 
+def create_django_and_firebase_user(username, email, password, role, **extra_fields):
+    User = get_user_model()
+    user = User.objects.create_user(username=username, email=email, password=password, role=role, **extra_fields)
+    firebase_result = create_firebase_user(email, password, user.id, role)
+    if not firebase_result['success']:
+        user.delete()
+        raise Exception(firebase_result['message'])
+    return user
+
 def save_message_to_firebase(user_id, conversation_id, message, response):
     try:
-        firebase = pyrebase.initialize_app(settings.FIREBASE_CONFIG)
-        db = firebase.database()
+        ref = db.reference(f'chat_messages/{conversation_id}')
         message_data = {
-            'user_id': user_id,
+            'user_id': str(user_id),
             'message': message,
             'response': response,
             'timestamp': timezone.now().isoformat(),
             'message_type': 'user'
         }
-        db.child('chat_messages').child(conversation_id).push(message_data)
+        ref.push(message_data)
         return {'success': True, 'message': 'Tin nhắn đã được lưu vào Firebase.'}
     except Exception as e:
         return {'success': False, 'message': f"Lỗi khi lưu tin nhắn vào Firebase: {str(e)}"}

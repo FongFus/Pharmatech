@@ -1,17 +1,34 @@
-# core/consumers.py
 from channels.generic.websocket import AsyncWebsocketConsumer
 import json
 from .utils import call_gemini_api, save_message_to_firebase, send_fcm_v1
-import uuid
+from oauth2_provider.models import AccessToken
 
 class ChatConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         self.conversation_id = self.scope['url_route']['kwargs']['conversation_id']
         self.user = self.scope['user']
         if not self.user.is_authenticated:
-            await self.close()
-            return
-        await self.accept()
+            # Kiểm tra token từ query string
+            query_string = self.scope.get('query_string', b'').decode()
+            token = None
+            for param in query_string.split('&'):
+                if param.startswith('token='):
+                    token = param.split('=')[1]
+                    break
+            if token:
+                try:
+                    access_token = AccessToken.objects.get(token=token)
+                    if access_token.is_valid():
+                        self.user = access_token.user
+                        await self.accept()
+                    else:
+                        await self.close(code=4001)
+                except AccessToken.DoesNotExist:
+                    await self.close(code=4001)
+            else:
+                await self.close(code=4001)
+        else:
+            await self.accept()
 
     async def disconnect(self, close_code):
         pass
@@ -24,22 +41,18 @@ class ChatConsumer(AsyncWebsocketConsumer):
             return
 
         try:
-            # Gọi Gemini API để lấy phản hồi
             response_text = call_gemini_api(message)
-            # Lưu tin nhắn và phản hồi vào Firebase
-            result = save_message_to_firebase(self.user.id, self.conversation_id, message, response_text)
+            result = save_message_to_firebase(str(self.user.id), self.conversation_id, message, response_text)
             if not result['success']:
                 await self.send(text_data=json.dumps({'error': result['message']}))
                 return
 
-            # Gửi phản hồi qua WebSocket
             await self.send(text_data=json.dumps({
                 'conversation_id': self.conversation_id,
                 'message': message,
                 'response': response_text
             }))
 
-            # Gửi thông báo FCM
             send_fcm_v1(self.user, "Phản hồi chatbot", response_text)
         except Exception as e:
             await self.send(text_data=json.dumps({'error': f"Lỗi: {str(e)}"}))
