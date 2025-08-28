@@ -22,8 +22,9 @@ from .serializers import (
 from .permissions import (
     IsCustomer, IsDistributor, IsAdmin, IsCartOwner, IsOrderOwner, IsProductOwner, IsInventoryManager, IsCategoryManager, IsPaymentManager, IsConversationViewer
 )
+from rest_framework.permissions import AllowAny
 from .paginators import ItemPaginator
-from .utils import send_fcm_v1, save_message_to_firebase, generate_reset_code
+from .utils import send_fcm_v1, save_message_to_firebase, generate_reset_code, create_stripe_checkout_session, process_stripe_refund
 from .authentication import CustomOAuth2Authentication
 from django.http import JsonResponse, HttpResponse
 import uuid
@@ -35,6 +36,7 @@ import pytz
 from django.test import RequestFactory
 from .utils import call_gemini_api, save_message_to_firebase, send_fcm_v1
 import pyrebase
+import stripe
 from .tasks import send_payment_confirmation_email, notify_product_approval
 from django.contrib.auth.tokens import default_token_generator
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
@@ -467,19 +469,15 @@ class PaymentViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAP
     pagination_class = ItemPaginator
 
     def get_permissions(self):
-        if self.action in ['list', 'retrieve', 'create_vnpay_url', 'confirm_payment']:
+        if self.action in ['list', 'retrieve', 'create_stripe_payment', 'confirm_payment', 'handle_success', 'handle_cancel']:
             return [IsCustomer()]
-        elif self.action in ['vnpay_callback']:
-            return [permissions.AllowAny()]  # VNPay callback không cần authentication
         elif self.action in ['refund_payment']:
-            return [IsAdmin()]  # Chỉ admin có thể hoàn tiền
+            return [IsAdmin()]
         return [permissions.IsAuthenticated()]
 
     def get_queryset(self):
-        # Customer chỉ xem được payment của mình
         if self.request.user.role == 'customer':
             return self.queryset.filter(user=self.request.user)
-        # Admin xem được tất cả
         elif self.request.user.role == 'admin':
             return self.queryset
         return Payment.objects.none()
@@ -492,247 +490,175 @@ class PaymentViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAP
         serializer = self.get_serializer(payment)
         return Response(serializer.data)
 
-    @action(detail=True, methods=['post'], url_path='confirm')
-    def confirm_payment(self, request, pk):
-        payment = self.get_object()
-        if payment.status != 'pending':
-            return Response({"error": "Thanh toán đã được xử lý."}, status=status.HTTP_400_BAD_REQUEST)
-        if payment.user != request.user:
-            return Response({"error": "Không có quyền xác nhận thanh toán này."}, status=status.HTTP_403_FORBIDDEN)
-
-        payment.status = 'completed'
-        payment.paid_at = timezone.now()
-        payment.save()
-
-        # Cập nhật trạng thái đơn hàng
-        order = payment.order
-        order.status = 'processing'
-        order.save()
-
-        # Gửi email xác nhận thanh toán
-        send_payment_confirmation_email.delay(payment.id)
-
-        return Response({
-            "message": "Thanh toán xác nhận thành công.",
-            "payment": PaymentSerializer(payment).data
-        })
-
-    @action(detail=False, methods=['post'], url_path='create-vnpay-url')
-    def create_vnpay_url(self, request):
+    @action(detail=False, methods=['post'], url_path='create-stripe-payment')
+    def create_stripe_payment(self, request):
+        """Tạo Stripe Checkout Session cho thanh toán."""
         order_id = request.data.get('order_id')
         if not order_id:
-            return Response({"error": "Thiếu order_id."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'Order ID is required.'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             order = Order.objects.get(id=order_id, user=request.user)
-        except Order.DoesNotExist:
-            return Response({"error": "Đơn hàng không tồn tại."}, status=status.HTTP_404_NOT_FOUND)
+            if order.status != 'pending':
+                return Response({'error': 'Chỉ đơn hàng đang chờ xử lý mới có thể thanh toán.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Kiểm tra xem đã có payment chưa
-        if hasattr(order, 'payment'):
-            payment = order.payment
-            if payment.status == 'completed':
-                return Response({"error": "Đơn hàng đã được thanh toán."}, status=status.HTTP_400_BAD_REQUEST)
-        else:
-            # Tạo payment mới
+            if Payment.objects.filter(order=order).exists():
+                return Response({'error': 'Đơn hàng này đã có thanh toán.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            result = create_stripe_checkout_session(order, request.user)
+            if not result['success']:
+                return Response({'error': result['message']}, status=status.HTTP_400_BAD_REQUEST)
+
             payment = Payment.objects.create(
                 order=order,
                 user=request.user,
                 amount=order.total_amount,
-                payment_method='vnpay',
+                payment_method='stripe',
                 status='pending',
-                transaction_id=str(uuid.uuid4())
+                transaction_id=result['session_id']
             )
 
-        # Tạo URL thanh toán VNPay
-        vnp_TmnCode = settings.VNPAY_TMN_CODE
-        vnp_HashSecret = settings.VNPAY_HASH_SECRET
-        vnp_Url = settings.VNPAY_URL
-        vnp_ReturnUrl = settings.VNPAY_RETURN_URL
+            return Response({
+                'checkout_url': result['checkout_url'],
+                'payment_id': payment.id,
+                'order_code': order.order_code
+            }, status=status.HTTP_201_CREATED)
 
-        # Định dạng số tiền (nhân với 100 vì VNPay yêu cầu)
-        amount = int(float(payment.amount) * 100)
+        except Order.DoesNotExist:
+            return Response({'error': 'Không tìm thấy đơn hàng.'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        # Tạo dữ liệu gửi lên VNPay
-        input_data = {
-            "vnp_Version": "2.1.0",
-            "vnp_Command": "pay",
-            "vnp_TmnCode": vnp_TmnCode,
-            "vnp_Amount": str(amount),
-            "vnp_CurrCode": "VND",
-            "vnp_TxnRef": payment.transaction_id,
-            "vnp_OrderInfo": f"Thanh toan don hang {order.order_code}",
-            "vnp_OrderType": "billpayment",
-            "vnp_Locale": "vn",
-            "vnp_ReturnUrl": vnp_ReturnUrl,
-            "vnp_IpAddr": self.get_client_ip(request),
-            "vnp_CreateDate": timezone.now().strftime('%Y%m%d%H%M%S')
-        }
-
-        # Sắp xếp dữ liệu và tạo chuỗi hash
-        sorted_data = sorted(input_data.items())
-        query_string = '&'.join(
-            f"{k}={self.vnpay_encode(str(v))}"
-            for k, v in sorted_data
-            if v
-        )
-        
-        hash_data = '&'.join(
-            f"{k}={self.vnpay_encode(str(v))}"
-            for k, v in sorted_data
-            if v and k != "vnp_SecureHash"
-        )
-
-        # Tạo chữ ký bảo mật
-        secure_hash = hmac.new(
-            bytes(vnp_HashSecret, 'utf-8'),
-            bytes(hash_data, 'utf-8'),
-            hashlib.sha512
-        ).hexdigest()
-
-        # Tạo payment URL
-        payment_url = f"{vnp_Url}?{query_string}&vnp_SecureHash={secure_hash}"
-
-        return Response({
-            "payment_url": payment_url,
-            "payment_id": payment.id
-        })
-
-    def vnpay_encode(self, value):
-        """Encode giá trị theo chuẩn VNPay"""
-        return quote_plus(str(value), safe='')
-
-    def get_client_ip(self, request):
-        """Lấy địa chỉ IP của client"""
-        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-        if x_forwarded_for:
-            ip = x_forwarded_for.split(',')[0]
-        else:
-            ip = request.META.get('REMOTE_ADDR')
-        return ip
-
-    @action(detail=False, methods=['post'], url_path='vnpay-callback')
-    @method_decorator(csrf_exempt)
-    def vnpay_callback(self, request):
-        """Xử lý callback từ VNPay sau khi thanh toán"""
-        # VNPay có thể gửi dữ liệu qua POST form hoặc GET parameters
-        vnp_ResponseCode = request.data.get('vnp_ResponseCode') or request.GET.get('vnp_ResponseCode')
-        vnp_TxnRef = request.data.get('vnp_TxnRef') or request.GET.get('vnp_TxnRef')
-        vnp_Amount = request.data.get('vnp_Amount') or request.GET.get('vnp_Amount')
-        vnp_SecureHash = request.data.get('vnp_SecureHash') or request.GET.get('vnp_SecureHash')
-        
-        if not all([vnp_ResponseCode, vnp_TxnRef, vnp_Amount, vnp_SecureHash]):
-            return Response({"error": "Thiếu tham số từ VNPay."}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Kiểm tra chữ ký bảo mật
-        if not self.verify_vnpay_signature(request):
-            return Response({"error": "Chữ ký không hợp lệ."}, status=status.HTTP_400_BAD_REQUEST)
-
+    @action(detail=True, methods=['post'], url_path='confirm-payment')
+    def confirm_payment(self, request, pk=None):
+        """Xác nhận thanh toán Stripe Checkout."""
         try:
-            payment = Payment.objects.get(transaction_id=vnp_TxnRef)
+            payment = self.get_queryset().get(pk=pk)
+            if payment.user != request.user:
+                return Response({'error': 'Không có quyền xác nhận thanh toán này.'}, status=status.HTTP_403_FORBIDDEN)
+
+            session = stripe.checkout.Session.retrieve(payment.transaction_id)
+            if session.payment_status == 'paid':
+                payment.status = 'completed'
+                payment.paid_at = timezone.now()
+                payment.save()
+                send_payment_confirmation_email.delay(
+                    user_id=payment.user.id,
+                    order_code=payment.order.order_code
+                )
+                return Response({'message': 'Thanh toán đã được xác nhận.'}, status=status.HTTP_200_OK)
+            else:
+                payment.status = 'failed'
+                payment.save()
+                return Response({'error': 'Thanh toán không thành công.'}, status=status.HTTP_400_BAD_REQUEST)
+
         except Payment.DoesNotExist:
-            return Response({"error": "Không tìm thấy giao dịch."}, status=status.HTTP_404_NOT_FOUND)
-
-        # Kiểm tra số tiền
-        expected_amount = int(float(payment.amount) * 100)
-        if int(vnp_Amount) != expected_amount:
-            return Response({"error": "Số tiền không khớp."}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Xử lý kết quả thanh toán
-        if vnp_ResponseCode == '00':  # Thành công
-            payment.status = 'completed'
-            payment.paid_at = timezone.now()
-            payment.save()
-
-            # Cập nhật trạng thái đơn hàng
-            order = payment.order
-            order.status = 'processing'
-            order.save()
-
-            # Gửi thông báo
-            send_payment_confirmation_email.delay(payment.id)
-            send_fcm_v1(
-                payment.user,
-                title="Thanh toán thành công",
-                body=f"Đơn hàng {order.order_code} đã được thanh toán thành công.",
-                data={"order_id": str(order.id), "type": "payment_success"}
-            )
-
-            return Response({"message": "Thanh toán thành công.", "order_code": order.order_code})
-        else:
-            # Thanh toán thất bại
-            payment.status = 'refunded'
-            payment.refunded_at = timezone.now()
-            payment.save()
-
-            return Response({"error": "Thanh toán thất bại.", "response_code": vnp_ResponseCode}, 
-                          status=status.HTTP_400_BAD_REQUEST)
-
-    def verify_vnpay_signature(self, request):
-        """Xác minh chữ ký từ VNPay"""
-        vnp_HashSecret = settings.VNPAY_HASH_SECRET
-        
-        # Lấy tất cả các tham số từ request
-        params = {}
-        for key, value in request.data.items():
-            if key.startswith('vnp_'):
-                params[key] = value
-        for key, value in request.GET.items():
-            if key.startswith('vnp_'):
-                params[key] = value
-        
-        # Loại bỏ chữ ký để tính toán
-        vnp_SecureHash = params.pop('vnp_SecureHash', '')
-        
-        # Sắp xếp các tham số theo thứ tự alphabet
-        sorted_params = sorted(params.items())
-        
-        # Tạo chuỗi dữ liệu để hash
-        hash_data = '&'.join(
-            f"{key}={self.vnpay_encode(str(value))}"
-            for key, value in sorted_params
-            if value
-        )
-        
-        # Tạo chữ ký
-        computed_hash = hmac.new(
-            bytes(vnp_HashSecret, 'utf-8'),
-            bytes(hash_data, 'utf-8'),
-            hashlib.sha512
-        ).hexdigest()
-        
-        return computed_hash == vnp_SecureHash
+            return Response({'error': 'Không tìm thấy thanh toán.'}, status=status.HTTP_404_NOT_FOUND)
+        except stripe.error.StripeError as e:
+            return Response({'error': f"Lỗi Stripe: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=True, methods=['post'], url_path='refund')
-    def refund_payment(self, request, pk):
-        """Yêu cầu hoàn tiền (chỉ admin)"""
-        payment = self.get_object()
-        
-        if payment.status != 'completed':
-            return Response({"error": "Chỉ có thể hoàn tiền cho thanh toán đã thành công."}, 
-                          status=status.HTTP_400_BAD_REQUEST)
-        
-        if payment.payment_method != 'vnpay':
-            return Response({"error": "Chỉ hỗ trợ hoàn tiền cho phương thức VNPay."}, 
-                          status=status.HTTP_400_BAD_REQUEST)
+    def refund_payment(self, request, pk=None):
+        """Hoàn tiền cho thanh toán (chỉ admin)."""
+        try:
+            payment = self.get_queryset().get(pk=pk)
+            if payment.status != 'completed':
+                return Response({'error': 'Chỉ có thể hoàn tiền cho thanh toán đã hoàn tất.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Gọi utility function để xử lý hoàn tiền
-        from .utils import process_refund
-        result = process_refund(payment)
-        
-        if result['success']:
-            payment.status = 'refunded'
-            payment.refunded_at = timezone.now()
+            result = process_stripe_refund(payment)
+            if result['success']:
+                payment.status = 'refunded'
+                payment.refunded_at = timezone.now()
+                payment.save()
+                return Response({'message': 'Hoàn tiền thành công.'}, status=status.HTTP_200_OK)
+            return Response({'error': result['message']}, status=status.HTTP_400_BAD_REQUEST)
+
+        except Payment.DoesNotExist:
+            return Response({'error': 'Không tìm thấy thanh toán.'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=['get'], url_path='success', permission_classes=[AllowAny])
+    def handle_success(self, request):
+        """Xử lý điều hướng sau khi thanh toán thành công từ Stripe."""
+        session_id = request.query_params.get('session_id')
+        if not session_id:
+            logger.error("Missing session_id in /success/ request")
+            return Response({'error': 'Thiếu session_id.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # Lấy thông tin Checkout Session
+            session = stripe.checkout.Session.retrieve(session_id, expand=['payment_intent'])
+            payment = Payment.objects.get(transaction_id=session_id)
+            payment_intent = session.payment_intent
+
+            logger.info(f"Processing /success/ for session_id: {session_id}, "
+                        f"session_payment_status: {session.payment_status}, "
+                        f"payment_intent_status: {payment_intent.status if payment_intent else 'N/A'}, "
+                        f"current_payment_status: {payment.status}")
+
+            # Kiểm tra trạng thái thanh toán
+            if session.payment_status == 'paid' or (payment_intent and payment_intent.status == 'succeeded'):
+                if payment.status != 'completed':
+                    payment.status = 'completed'
+                    payment.paid_at = timezone.now()
+                    payment.save()
+                    send_payment_confirmation_email.delay(
+                        user_id=payment.user.id,
+                        order_code=payment.order.order_code
+                    )
+                    logger.info(f"Payment {payment.id} updated to completed for order {payment.order.order_code}")
+                else:
+                    logger.info(f"Payment {payment.id} already completed, skipping update")
+                return Response({
+                    'message': 'Thanh toán thành công.',
+                    'payment_id': payment.id,
+                    'order_code': payment.order.order_code,
+                    'status': payment.status
+                }, status=status.HTTP_200_OK)
+            else:
+                if payment.status != 'failed':
+                    payment.status = 'failed'
+                    payment.save()
+                    logger.info(f"Payment {payment.id} updated to failed")
+                return Response({
+                    'error': 'Thanh toán không thành công.',
+                    'status': payment.status,
+                    'session_payment_status': session.payment_status,
+                    'payment_intent_status': payment_intent.status if payment_intent else 'N/A'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+        except Payment.DoesNotExist:
+            logger.error(f"Payment not found for session_id: {session_id}")
+            return Response({'error': 'Không tìm thấy thanh toán.'}, status=status.HTTP_404_NOT_FOUND)
+        except stripe.error.StripeError as e:
+            logger.error(f"Stripe error for session_id {session_id}: {str(e)}")
+            return Response({'error': f"Lỗi Stripe: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.error(f"Unexpected error for session_id {session_id}: {str(e)}")
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=['get'], url_path='cancel', permission_classes=[AllowAny])
+    def handle_cancel(self, request):
+        """Xử lý điều hướng khi thanh toán bị hủy."""
+        session_id = request.query_params.get('session_id')
+        if not session_id:
+            return Response({'error': 'Thiếu session_id.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            payment = Payment.objects.get(transaction_id=session_id)
+            payment.status = 'failed'
             payment.save()
-            
-            # Cập nhật trạng thái đơn hàng
-            order = payment.order
-            order.status = 'cancelled'
-            order.save()
-            
-            return Response({"message": "Yêu cầu hoàn tiền đã được xử lý."})
-        else:
-            return Response({"error": result['message']}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({
+                'message': 'Thanh toán đã bị hủy.',
+                'status': payment.status
+            }, status=status.HTTP_200_OK)
+        except Payment.DoesNotExist:
+            return Response({'error': 'Không tìm thấy thanh toán.'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 # Category ViewSet
 class CategoryViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.UpdateAPIView, generics.DestroyAPIView, generics.RetrieveAPIView):

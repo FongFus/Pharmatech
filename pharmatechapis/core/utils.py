@@ -5,6 +5,7 @@ from django.conf import settings
 from django.utils import timezone
 import firebase_admin
 import hashlib
+import stripe
 import hmac
 from urllib.parse import quote_plus
 from django.contrib.auth import get_user_model
@@ -106,47 +107,53 @@ def send_fcm_v1(user, title, body, data=None):
     except Exception as e:
         return {'success': False, 'message': f"Lỗi khi gửi FCM: {str(e)}"}
 
-def process_refund(payment):
-    """Xử lý hoàn tiền cho thanh toán qua VNPay."""
+# Khởi tạo Stripe
+stripe.api_key = settings.STRIPE_SECRET_KEY
+def create_stripe_checkout_session(order, user):
+    """Tạo Stripe Checkout Session."""
     try:
-        vnp_TmnCode = settings.VNPAY_TMN_CODE
-        vnp_HashSecret = settings.VNPAY_HASH_SECRET
-        vnp_Url = settings.VNPAY_URL
-        tz = timezone.get_current_timezone()
-
-        input_data = {
-            "vnp_TmnCode": vnp_TmnCode,
-            "vnp_TransactionNo": payment.transaction_id,
-            "vnp_Amount": str(int(float(payment.amount) * 100)),
-            "vnp_TransactionDate": payment.created_at.strftime('%Y%m%d%H%M%S'),
-            "vnp_CreateDate": timezone.now().strftime('%Y%m%d%H%M%S'),
-            "vnp_IpAddr": "127.0.0.1",  # Có thể lấy từ request nếu cần
-            "vnp_Command": "refund",
-            "vnp_TransactionType": "02",  # Hoàn tiền toàn phần
-            "vnp_OrderInfo": f"Hoan tien don hang {payment.order.order_code}"
+        session = stripe.checkout.Session.create(
+            payment_method_types=['card'],
+            line_items=[
+                {
+                    'price_data': {
+                        'currency': 'vnd',  # Sử dụng VND
+                        'product_data': {
+                            'name': f"Đơn hàng {order.order_code}",
+                        },
+                        'unit_amount': int(order.total_amount),  # Số tiền VND trực tiếp
+                    },
+                    'quantity': 1,
+                },
+            ],
+            mode='payment',
+            success_url=f"{settings.BACKEND_URL}/success/?session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{settings.BACKEND_URL}/cancel/",
+            metadata={
+                'order_id': order.id,
+                'order_code': order.order_code,
+                'user_id': str(user.id),
+            },
+        )
+        return {
+            'success': True,
+            'checkout_url': session.url,
+            'session_id': session.id
         }
+    except stripe.error.StripeError as e:
+        return {'success': False, 'message': f"Lỗi khi tạo Checkout Session: {str(e)}"}
 
-        sorted_data = sorted(input_data.items())
-        query_string = '&'.join(f"{k}={quote_plus(str(v))}" for k, v in sorted_data if v)
-        hash_data = '&'.join(f"{k}={quote_plus(str(v))}" for k, v in sorted_data if v and k != "vnp_SecureHash")
-
-        secure_hash = hmac.new(
-            bytes(vnp_HashSecret, 'utf-8'),
-            bytes(hash_data, 'utf-8'),
-            hashlib.sha512
-        ).hexdigest()
-
-        refund_url = f"{vnp_Url}?{query_string}&vnp_SecureHash={secure_hash}"
-        response = requests.post(refund_url)
-        response.raise_for_status()
-        result = response.json()
-
-        if result.get("vnp_ResponseCode") == "00":
-            return {"success": True}
-        else:
-            return {"success": False, "message": result.get("vnp_Message", "Refund failed")}
-    except Exception as e:
-        return {"success": False, "message": f"Error processing VNPay refund: {str(e)}"}
+def process_stripe_refund(payment):
+    """Xử lý hoàn tiền qua Stripe."""
+    try:
+        refund = stripe.Refund.create(
+            payment_intent=payment.transaction_id,
+            amount=int(float(payment.amount) * 100),  # Chuyển sang cent
+            reason='requested_by_customer',
+        )
+        return {'success': True, 'refund_id': refund.id}
+    except stripe.error.StripeError as e:
+        return {'success': False, 'message': f"Lỗi khi hoàn tiền: {str(e)}"}
 
 def generate_reset_code(uidb64, token):
     """Tạo mã code 6 ký tự từ uidb64 và token."""

@@ -147,9 +147,17 @@ class Payment(models.Model):
     order = models.OneToOneField(Order, on_delete=models.CASCADE)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='payments')
     amount = models.DecimalField(max_digits=10, decimal_places=2)
-    payment_method = models.CharField(max_length=20, choices=[('vnpay', 'VNPay')], default='vnpay')
-    status = models.CharField(max_length=20, choices=[('pending', 'Pending'), ('completed', 'Completed'), ('refunded', 'Refunded')], default='pending')
-    transaction_id = models.CharField(max_length=50, null=True, blank=True)
+    payment_method = models.CharField(
+        max_length=20,
+        choices=[('stripe', 'Stripe')],
+        default='stripe'
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=[('pending', 'Pending'), ('completed', 'Completed'), ('refunded', 'Refunded'), ('failed', 'Failed')],
+        default='pending'
+    )
+    transaction_id = models.CharField(max_length=100, null=True, blank=True)
     paid_at = models.DateTimeField(null=True, blank=True)
     refunded_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -159,6 +167,7 @@ class Payment(models.Model):
 
     def __str__(self):
         return f"Payment for Order {self.order.order_code}"
+
 class DeviceToken(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     token = models.CharField(max_length=200)

@@ -206,6 +206,11 @@ class OrderItemSerializer(ModelSerializer):
 class PaymentSerializer(ModelSerializer):
     order_code = serializers.ReadOnlyField(source='order.order_code')
     user = serializers.ReadOnlyField(source='user.username')
+    payment_method = serializers.ChoiceField(
+        choices=['stripe'],
+        default='stripe',
+        required=False
+    )
 
     class Meta:
         model = Payment

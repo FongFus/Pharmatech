@@ -1,7 +1,7 @@
 from celery import shared_task
 from django.utils import timezone
 from .models import User, Product, Order, Payment
-from .utils import send_fcm_v1, process_refund
+from .utils import send_fcm_v1
 from django.core.mail import send_mail
 from django.conf import settings
 
@@ -12,7 +12,7 @@ def send_payment_confirmation_email(user_id, order_code):
         user = User.objects.get(id=user_id)
         send_mail(
             subject=f"Thanh toán thành công cho đơn hàng {order_code}",
-            message=f"Kính gửi {user.username},\n\nThanh toán cho đơn hàng {order_code} đã được xác nhận.\n\nTrân trọng!",
+            message=f"Kính gửi {user.username},\n\nThanh toán cho đơn hàng {order_code} qua Stripe đã được xác nhận.\n\nTrân trọng!",
             from_email=settings.EMAIL_HOST_USER,
             recipient_list=[user.email],
             fail_silently=False,
@@ -26,8 +26,8 @@ def process_order_refunded(order_id):
     try:
         order = Order.objects.get(id=order_id)
         payment = Payment.objects.get(order=order)
-        if payment.status:
-            result = process_refund(payment)
+        if payment.status == 'completed':
+            result = process_stripe_refund(payment)
             if result['success']:
                 payment.status = 'refunded'
                 payment.refunded_at = timezone.now()
@@ -35,12 +35,12 @@ def process_order_refunded(order_id):
                 send_fcm_v1(
                     user=order.user,
                     title="Hoàn tiền thành công",
-                    body=f"Đơn hàng {order.order_code} đã được hoàn tiền {payment.amount} VND.",
+                    body=f"Đơn hàng {order.order_code} đã được hoàn tiền {payment.amount} VND qua Stripe.",
                     data={"order_id": str(order.id)}
                 )
                 send_mail(
                     subject=f"Hoàn tiền cho đơn hàng {order.order_code}",
-                    message=f"Kính gửi {order.user.username},\n\nHoàn tiền cho đơn hàng {order.order_code} đã được xử lý.\n\nTrân trọng!",
+                    message=f"Kính gửi {order.user.username},\n\nHoàn tiền cho đơn hàng {order.order_code} đã được xử lý qua Stripe.\n\nTrân trọng!",
                     from_email=settings.EMAIL_HOST_USER,
                     recipient_list=[order.user.email],
                     fail_silently=False,

@@ -1,6 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from . import views
+from .views import PaymentViewSet
 
 router = DefaultRouter()
 router.register(r'users', views.UserViewSet, basename='user')
@@ -16,4 +17,6 @@ urlpatterns = [
     path('', include(router.urls)),
     path('ping/', views.ping_view, name='ping'),
     path('statistics/', views.system_statistics, name='system-statistics'),
+    path('success/', PaymentViewSet.as_view({'get': 'handle_success'}), name='payment-success'),
+    path('cancel/', PaymentViewSet.as_view({'get': 'handle_cancel'}), name='payment-cancel'),
 ]
