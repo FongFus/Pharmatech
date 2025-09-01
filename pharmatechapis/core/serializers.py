@@ -3,7 +3,7 @@ from rest_framework.serializers import ModelSerializer
 from django.utils import timezone
 from decimal import Decimal
 from cloudinary.utils import cloudinary_url
-from .models import User, Product, Cart, CartItem, Order, OrderItem, Payment, DeviceToken, Category, Inventory
+from .models import User, Product, Cart, CartItem, Order, OrderItem, Payment, DeviceToken, Category, Inventory, Discount, Notification, Review, ReviewReply
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
 from django.utils.http import urlsafe_base64_decode
@@ -80,10 +80,14 @@ class UserDetailSerializer(ModelSerializer):
 
 # Serializer cho Product
 class ProductSerializer(ModelSerializer):
+    total_stock = serializers.SerializerMethodField()
     class Meta:
         model = Product
-        fields = ['id', 'distributor', 'name', 'description', 'category', 'price', 'stock', 'image', 'is_approved', 'created_at', 'updated_at']
+        fields = ['id', 'distributor', 'name', 'description', 'category', 'price', 'total_stock', 'image', 'is_approved', 'created_at', 'updated_at']
         read_only_fields = ['id', 'distributor', 'created_at', 'updated_at', 'is_approved']
+
+    def get_total_stock(self, obj):
+        return obj.total_stock
 
     def validate(self, data):
         user = self.context['request'].user
@@ -158,7 +162,7 @@ class CartItemSerializer(ModelSerializer):
         product = self.initial_data.get('product_id')
         if product:
             product_instance = Product.objects.get(id=product)
-            if value > product_instance.stock:
+            if value > product_instance.total_stock:
                 raise serializers.ValidationError(f"Số lượng vượt quá tồn kho ({product_instance.stock}).")
         return value
 
@@ -166,11 +170,12 @@ class CartItemSerializer(ModelSerializer):
 class OrderSerializer(ModelSerializer):
     items = serializers.SerializerMethodField()
     user = serializers.ReadOnlyField(source='user.username')
+    discount_code = serializers.CharField(write_only=True, required=False)
 
     class Meta:
         model = Order
-        fields = ['id', 'user', 'order_code', 'total_amount', 'status', 'items', 'created_at', 'updated_at']
-        read_only_fields = ['id', 'user', 'order_code', 'total_amount', 'created_at', 'updated_at']
+        fields = ['id', 'user', 'order_code', 'total_amount', 'discount_amount', 'status', 'items', 'created_at', 'updated_at', 'discount_code']
+        read_only_fields = ['id', 'user', 'order_code', 'total_amount', 'discount_amount', 'created_at', 'updated_at']
 
     def get_items(self, obj):
         items = obj.items.all()
@@ -180,7 +185,80 @@ class OrderSerializer(ModelSerializer):
         user = self.context['request'].user
         if user.role != 'customer':
             raise serializers.ValidationError("Chỉ khách hàng mới có thể tạo đơn hàng.")
+
+        discount_code = self.initial_data.get('discount_code')
+        cart_id = self.initial_data.get('cart_id')
+
+        total_amount = Decimal('0')
+
+        if cart_id:
+            try:
+                cart = Cart.objects.prefetch_related('items__product').get(id=cart_id, user=user)
+            except Cart.DoesNotExist:
+                raise serializers.ValidationError("Giỏ hàng không tồn tại.")
+        
+            for item in cart.items.all():
+                total_amount += item.quantity * item.product.price
+        else:
+            # fallback nếu truyền thẳng items vào request
+            items_data = self.initial_data.get('items', [])
+            for item_data in items_data:
+                product_id = item_data.get('product_id')
+                quantity = item_data.get('quantity', 0)
+                try:
+                    product = Product.objects.get(id=product_id)
+                    total_amount += product.price * quantity
+                except Product.DoesNotExist:
+                    raise serializers.ValidationError(f"Sản phẩm với ID {product_id} không tồn tại.")
+
+        if discount_code:
+            try:
+                discount = Discount.objects.get(code=discount_code)
+            except Discount.DoesNotExist:
+                raise serializers.ValidationError("Mã giảm giá không tồn tại.")
+
+            valid, message = discount.is_valid(total_amount)
+            if not valid:
+                raise serializers.ValidationError(message)
+
         return data
+
+    def create(self, validated_data):
+        user = self.context['request'].user
+        cart_id = self.initial_data.get('cart_id')
+        discount_code = self.initial_data.get('discount_code')
+
+        try:
+            cart = Cart.objects.get(id=cart_id, user=user)
+            order_code = timezone.now().strftime('%Y%m%d%H%M%S') + str(user.id)
+            order = Order.objects.create(user=user, order_code=order_code)
+
+            for cart_item in cart.items.all():
+                OrderItem.objects.create(
+                    order=order,
+                    product=cart_item.product,
+                    quantity=cart_item.quantity,
+                    price=cart_item.product.price
+                )
+
+            if discount_code:
+                discount = Discount.objects.get(code=discount_code)
+                order.discount = discount
+                order.apply_discount()
+
+            # Clear the cart after creating the order
+            cart.items.all().delete()
+
+            return order
+
+        except Cart.DoesNotExist:
+            raise serializers.ValidationError("Giỏ hàng không tồn tại hoặc không thuộc về người dùng này.")
+        except Discount.DoesNotExist:
+            order.delete()  # Rollback order creation
+            raise serializers.ValidationError("Mã giảm giá không hợp lệ.")
+        except Exception as e:
+            order.delete()  # Rollback order creation
+            raise serializers.ValidationError(str(e))
 
 # Serializer cho OrderItem
 class OrderItemSerializer(ModelSerializer):
@@ -198,7 +276,7 @@ class OrderItemSerializer(ModelSerializer):
         product = self.initial_data.get('product_id')
         if product:
             product_instance = Product.objects.get(id=product)
-            if value > product_instance.stock:
+            if value > product_instance.total_stock:
                 raise serializers.ValidationError(f"Số lượng vượt quá tồn kho ({product_instance.stock}).")
         return value
 
@@ -249,6 +327,108 @@ class DeviceTokenSerializer(ModelSerializer):
         model = DeviceToken
         fields = ['id', 'user', 'token', 'device_type', 'created_at', 'updated_at']
         read_only_fields = ['id', 'user', 'created_at', 'updated_at']
+
+class DiscountSerializer(ModelSerializer):
+    is_valid_status = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Discount
+        fields = [
+            'id', 'code', 'description', 'discount_type', 'discount_value', 'max_discount_amount',
+            'min_order_value', 'start_date', 'end_date', 'max_uses', 'uses_count', 'is_active',
+            'created_at', 'updated_at', 'is_valid_status'
+        ]
+        read_only_fields = ['created_at', 'updated_at', 'uses_count', 'id']
+
+    def validate(self, data):
+        start_date = data.get('start_date')
+        end_date = data.get('end_date')
+        discount_type = data.get('discount_type')
+        discount_value = data.get('discount_value')
+
+        if start_date and end_date and start_date >= end_date:
+            raise serializers.ValidationError("start_date phải nhỏ hơn end_date.")
+
+        if discount_type == 'percentage':
+            if discount_value is None or discount_value < 0 or discount_value > 100:
+                raise serializers.ValidationError("discount_value phải trong khoảng 0-100 khi discount_type là 'percentage'.")
+        elif discount_type == 'fixed':
+            if discount_value is None or discount_value <= 0:
+                raise serializers.ValidationError("discount_value phải lớn hơn 0 khi discount_type là 'fixed'.")
+
+        return data
+
+    def get_is_valid_status(self, obj):
+        # We call is_valid with order_amount=0 to just check validity status without order context
+        valid, message = obj.is_valid(order_amount=0)
+        return {'valid': valid, 'message': message}
+
+class NotificationSerializer(ModelSerializer):
+    related_info = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Notification
+        fields = ['id', 'title', 'message', 'notification_type', 'is_read', 'related_order', 'related_product', 'created_at', 'updated_at', 'related_info']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_related_info(self, obj):
+        if obj.related_product:
+            return f"Sản phẩm: {obj.related_product.name}"
+        elif obj.related_order:
+            return f"Đơn hàng: {obj.related_order.order_code}"
+        return None
+
+    def update(self, instance, validated_data):
+        if 'is_read' in validated_data and validated_data['is_read']:
+            instance.is_read = True
+        return super().update(instance, validated_data)
+
+class ReviewSerializer(ModelSerializer):
+    product_name = serializers.SerializerMethodField()
+    order_code = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Review
+        fields = ['id', 'user', 'product', 'order', 'rating', 'comment', 'created_at', 'updated_at', 'product_name', 'order_code']
+        read_only_fields = ['id', 'user', 'created_at', 'updated_at', 'product_name', 'order_code']
+
+    def validate(self, data):
+        user = self.context['request'].user
+        product = data.get('product')
+        order = data.get('order')
+        if not order.items.filter(product=product).exists():
+            raise serializers.ValidationError("Người dùng không có đơn hàng chứa sản phẩm này.")
+        if not 1 <= data.get('rating', 0) <= 5:
+            raise serializers.ValidationError("Rating phải trong khoảng 1-5.")
+        return data
+
+    def get_product_name(self, obj):
+        return obj.product.name
+
+    def get_order_code(self, obj):
+        return obj.order.order_code if obj.order else None
+
+class ReviewReplySerializer(ModelSerializer):
+    review_id = serializers.SerializerMethodField()
+    product_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ReviewReply
+        fields = ['review', 'user', 'comment', 'created_at', 'updated_at', 'review_id', 'product_name']
+        read_only_fields = ['user', 'created_at', 'updated_at']
+
+    def validate(self, data):
+        user = self.context['request'].user
+        review = data.get('review')
+        if review.product.distributor != user and user.role != 'admin':
+            raise serializers.ValidationError("Chỉ admin hoặc nhà phân phối của sản phẩm mới có thể trả lời đánh giá.")
+        return data
+
+    def get_review_id(self, obj):
+        return obj.review.id
+
+    def get_product_name(self, obj):
+        return obj.review.product.name
 
 # Serializer cho Category
 class CategorySerializer(ModelSerializer):

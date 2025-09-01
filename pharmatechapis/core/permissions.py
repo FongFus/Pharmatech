@@ -56,3 +56,25 @@ class IsConversationViewer(permissions.BasePermission):
 
     def has_object_permission(self, request, view, obj):
         return obj.user == request.user
+
+class IsNotificationOwner(permissions.BasePermission):
+    """Chỉ cho phép chủ sở hữu thông báo thực hiện hành động trên thông báo."""
+    def has_object_permission(self, request, view, obj):
+        return obj.user == request.user
+
+class IsReviewOwner(permissions.BasePermission):
+    """Chỉ cho phép chủ sở hữu đánh giá thực hiện hành động trên đánh giá."""
+    def has_object_permission(self, request, view, obj):
+        return obj.user == request.user
+
+class IsAdminOrDistributor(permissions.BasePermission):
+    """Chỉ cho phép admin hoặc distributor sở hữu sản phẩm thực hiện hành động."""
+    def has_permission(self, request, view):
+        return request.user.is_authenticated and request.user.role in ['admin', 'distributor']
+
+    def has_object_permission(self, request, view, obj):
+        if request.user.role == 'admin':
+            return True
+        if request.user.role == 'distributor':
+            return hasattr(obj, 'product') and obj.product.distributor == request.user
+        return False

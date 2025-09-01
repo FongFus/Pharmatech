@@ -4,6 +4,8 @@ from django.utils import timezone
 from cloudinary.models import CloudinaryField
 from decimal import Decimal
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
+from django.db import transaction
+from django.db.models import F
 
 # Custom User Manager
 class CustomUserManager(BaseUserManager):
@@ -70,7 +72,6 @@ class Product(models.Model):
     description = models.TextField()
     category = models.ForeignKey(Category, on_delete=models.SET_NULL, null=True, blank=True)
     price = models.DecimalField(max_digits=10, decimal_places=2)
-    stock = models.PositiveIntegerField()
     image = CloudinaryField('image', null=True, blank=True)
     is_approved = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -81,6 +82,11 @@ class Product(models.Model):
 
     def __str__(self):
         return self.name
+
+    @property
+    def total_stock(self):
+        """Tính tổng số lượng tồn kho từ tất cả bản ghi Inventory."""
+        return self.inventory.aggregate(total=models.Sum('quantity'))['total'] or 0
 
 class Inventory(models.Model):
     distributor = models.ForeignKey(User, on_delete=models.CASCADE, related_name='inventory', limit_choices_to={'role': 'distributor'})
@@ -117,10 +123,85 @@ class CartItem(models.Model):
     def __str__(self):
         return f"{self.quantity} x {self.product.name}"
 
+    @transaction.atomic
+    def save(self, *args, **kwargs):
+        """Kiểm tra và cập nhật tồn kho trong transaction để tránh race conditions."""
+        inventory = Inventory.objects.select_for_update().get(
+            product=self.product, distributor=self.product.distributor
+        )
+        if self.quantity > inventory.quantity:
+            raise ValueError(f"Cannot add {self.quantity} items, only {inventory.quantity} in stock.")
+        inventory.quantity = F('quantity') - self.quantity
+        inventory.save()
+        super().save(*args, **kwargs)
+
+class Discount(models.Model):
+    code = models.CharField(max_length=50, unique=True)
+    description = models.TextField(blank=True, null=True)
+    discount_type = models.CharField(
+        max_length=20,
+        choices=[('percentage', 'Percentage'), ('fixed', 'Fixed Amount')],
+        default='percentage'
+    )
+    discount_value = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        validators=[MinValueValidator(0)]
+    )
+    max_discount_amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+        help_text="Maximum discount amount for percentage-based discounts."
+    )
+    min_order_value = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+        help_text="Minimum order value to apply this discount."
+    )
+    start_date = models.DateTimeField(default=timezone.now)
+    end_date = models.DateTimeField()
+    max_uses = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Maximum number of times this discount can be used."
+    )
+    uses_count = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=['code', 'is_active'])]
+        verbose_name = "Discount"
+        verbose_name_plural = "Discounts"
+
+    def __str__(self):
+        return self.code
+
+    def is_valid(self, order_amount):
+        """Kiểm tra xem mã giảm giá có hợp lệ không."""
+        now = timezone.now()
+        if not self.is_active:
+            return False, "Discount is not active."
+        if now < self.start_date or now > self.end_date:
+            return False, "Discount is expired or not yet active."
+        if self.max_uses and self.uses_count >= self.max_uses:
+            return False, "Discount has reached maximum uses."
+        if self.min_order_value and order_amount < self.min_order_value:
+            return False, f"Order amount must be at least {self.min_order_value}."
+        return True, "Discount is valid."
+
 class Order(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='orders', limit_choices_to={'role': 'customer'})
     order_code = models.CharField(max_length=20, unique=True)
-    total_amount = models.DecimalField(max_digits=10, decimal_places=2)
+    discount = models.ForeignKey(Discount, on_delete=models.SET_NULL, null=True, blank=True, related_name='orders')
+    discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0, validators=[MinValueValidator(0)])
     status = models.CharField(max_length=20, choices=[('pending', 'Pending'), ('processing', 'Processing'), ('completed', 'Completed'), ('cancelled', 'Cancelled')], default='pending')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -130,6 +211,36 @@ class Order(models.Model):
 
     def __str__(self):
         return f"Order {self.order_code}"
+
+    @property
+    def total_amount(self):
+        """Tính tổng số tiền từ các OrderItem, trừ đi discount_amount."""
+        items_total = sum(item.quantity * item.price for item in self.items.all())
+        return max(Decimal('0.00'), items_total - self.discount_amount)
+
+    @transaction.atomic
+    def apply_discount(self):
+        """Áp dụng mã giảm giá cho đơn hàng trong transaction."""
+        if not self.discount:
+            self.discount_amount = Decimal('0.00')
+            self.save()
+            return
+
+        items_total = sum(item.quantity * item.price for item in self.items.all())
+        is_valid, message = self.discount.is_valid(items_total)
+        if is_valid:
+            if self.discount.discount_type == 'percentage':
+                discount_amount = items_total * (self.discount.discount_value / 100)
+                if self.discount.max_discount_amount:
+                    discount_amount = min(discount_amount, self.discount.max_discount_amount)
+            else:  # fixed
+                discount_amount = self.discount.discount_value
+            self.discount_amount = discount_amount
+            self.discount.uses_count = F('uses_count') + 1
+            self.discount.save()
+            self.save()
+        else:
+            raise ValueError(message)
 
 class OrderItem(models.Model):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='items')
@@ -142,6 +253,18 @@ class OrderItem(models.Model):
 
     def __str__(self):
         return f"{self.quantity} x {self.product.name} in Order {self.order.order_code}"
+
+    @transaction.atomic
+    def save(self, *args, **kwargs):
+        """Kiểm tra và cập nhật tồn kho trong transaction để tránh race conditions."""
+        inventory = Inventory.objects.select_for_update().get(
+            product=self.product, distributor=self.product.distributor
+        )
+        if self.quantity > inventory.quantity:
+            raise ValueError(f"Cannot add {self.quantity} items, only {inventory.quantity} in stock.")
+        inventory.quantity = F('quantity') - self.quantity
+        inventory.save()
+        super().save(*args, **kwargs)
 
 class Payment(models.Model):
     order = models.OneToOneField(Order, on_delete=models.CASCADE)
@@ -181,3 +304,61 @@ class DeviceToken(models.Model):
 
     def __str__(self):
         return f"Device Token for {self.user.username}"
+
+class Notification(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
+    title = models.CharField(max_length=255)
+    message = models.TextField()
+    notification_type = models.CharField(
+        max_length=20,
+        choices=[
+            ('order', 'Order Update'),
+            ('promotion', 'Promotion'),
+            ('product', 'Product Update'),
+            ('system', 'System Notification')
+        ],
+        default='system'
+    )
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    related_order = models.ForeignKey(Order, on_delete=models.SET_NULL, null=True, blank=True, related_name='notifications')
+    related_product = models.ForeignKey(Product, on_delete=models.SET_NULL, null=True, blank=True, related_name='notifications')
+
+    class Meta:
+        indexes = [models.Index(fields=['user', 'is_read']), models.Index(fields=['created_at'])]
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.title} for {self.user.username}"
+
+class Review(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='reviews', limit_choices_to={'role': 'customer'})
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='reviews')
+    order = models.ForeignKey(Order, on_delete=models.SET_NULL, null=True, blank=True, related_name='reviews')
+    rating = models.PositiveIntegerField(validators=[MinValueValidator(1), MaxValueValidator(5)])
+    comment = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=['product', 'created_at'])]
+        unique_together = ('user', 'product', 'order')
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.rating} stars for {self.product.name} by {self.user.username}"
+
+class ReviewReply(models.Model):
+    review = models.ForeignKey(Review, on_delete=models.CASCADE, related_name='replies')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='review_replies', limit_choices_to={'role__in': ['distributor', 'admin']})
+    comment = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=['review', 'created_at'])]
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f"Reply to review {self.review.id} by {self.user.username}"

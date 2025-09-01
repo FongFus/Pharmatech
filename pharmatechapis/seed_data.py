@@ -10,7 +10,7 @@ from datetime import timedelta
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'pharmatech.settings')
 django.setup()
 
-from core.models import User, Category, Product, Inventory, Cart, CartItem, Order, OrderItem, Payment, DeviceToken
+from core.models import User, Category, Product, Inventory, Cart, CartItem, Order, OrderItem, Payment, DeviceToken, Discount, Notification, Review, ReviewReply
 
 # Khởi tạo Faker với locale tiếng Việt
 fake = Faker('vi_VN')
@@ -113,7 +113,6 @@ def create_products(num_products, distributors, categories):
             description=PRODUCT_DESCRIPTIONS.get(name, fake.text(max_nb_chars=300).replace('\n', ' ')),
             category=random.choice(categories),
             price=Decimal(str(round(random.uniform(50000.0, 2000000.0), 0))),
-            stock=random.randint(10, 500),
             image=None,
             is_approved=random.choice([True, False])
         )
@@ -126,8 +125,29 @@ def create_inventories(products, distributors):
         Inventory.objects.create(
             distributor=product.distributor,
             product=product,
-            quantity=random.randint(5, 200)
+            quantity=random.randint(50, 200)
         )
+
+# Hàm tạo mã giảm giá
+def create_discounts():
+    discounts = []
+    for _ in range(5):
+        start_date = timezone.now() - timedelta(days=random.randint(0, 10))
+        end_date = start_date + timedelta(days=random.randint(10, 30))
+        discount = Discount.objects.create(
+            code=fake.unique.bothify(text='PHARMA###'),
+            description=fake.text(max_nb_chars=100).replace('\n', ' '),
+            discount_type=random.choice(['percentage', 'fixed']),
+            discount_value=Decimal(str(round(random.uniform(5.0, 50.0), 2))),
+            max_discount_amount=Decimal(str(round(random.uniform(100000.0, 500000.0), 0))) if random.choice([True, False]) else None,
+            min_order_value=Decimal(str(round(random.uniform(500000.0, 2000000.0), 0))) if random.choice([True, False]) else None,
+            start_date=start_date,
+            end_date=end_date,
+            max_uses=random.randint(50, 200) if random.choice([True, False]) else None,
+            is_active=True
+        )
+        discounts.append(discount)
+    return discounts
 
 # Hàm tạo giỏ hàng
 def create_carts(customers):
@@ -143,14 +163,17 @@ def create_cart_items(carts, products):
         num_items = random.randint(1, 5)
         selected_products = random.sample(products, min(num_items, len(products)))
         for product in selected_products:
-            CartItem.objects.create(
-                cart=cart,
-                product=product,
-                quantity=random.randint(1, 20)
-            )
+            quantity = random.randint(1, 10)
+            inventory = Inventory.objects.get(product=product, distributor=product.distributor)
+            if quantity <= inventory.quantity:
+                CartItem.objects.create(
+                    cart=cart,
+                    product=product,
+                    quantity=quantity
+                )
 
 # Hàm tạo đơn hàng
-def create_orders(customers, products):
+def create_orders(customers, products, discounts):
     orders = []
     for customer in customers:
         num_orders = random.randint(1, 3)
@@ -158,7 +181,7 @@ def create_orders(customers, products):
             order = Order.objects.create(
                 user=customer,
                 order_code=fake.unique.uuid4()[:20],
-                total_amount=Decimal('0.00'),
+                discount=random.choice(discounts) if random.choice([True, False]) else None,
                 status=random.choice(['pending', 'processing', 'completed', 'cancelled'])
             )
             num_items = random.randint(1, 4)
@@ -166,15 +189,23 @@ def create_orders(customers, products):
             total = Decimal('0.00')
             for product in selected_products:
                 quantity = random.randint(1, 10)
-                price = product.price
-                OrderItem.objects.create(
-                    order=order,
-                    product=product,
-                    quantity=quantity,
-                    price=price
-                )
-                total += price * quantity
-            order.total_amount = total
+                inventory = Inventory.objects.get(product=product, distributor=product.distributor)
+                if quantity <= inventory.quantity:
+                    price = product.price
+                    OrderItem.objects.create(
+                        order=order,
+                        product=product,
+                        quantity=quantity,
+                        price=price
+                    )
+                    total += price * quantity
+            order.discount_amount = Decimal('0.00')
+            if order.discount:
+                try:
+                    order.apply_discount()
+                except ValueError:
+                    order.discount = None
+                    order.discount_amount = Decimal('0.00')
             order.save()
             orders.append(order)
     return orders
@@ -188,10 +219,58 @@ def create_payments(orders):
             amount=order.total_amount,
             payment_method='stripe',
             status=random.choice(['pending', 'completed', 'refunded', 'failed']),
-            transaction_id=f"pi_{fake.unique.uuid4()[:30]}",  # Định dạng transaction_id giống Stripe
+            transaction_id=f"pi_{fake.unique.uuid4()[:30]}",
             paid_at=timezone.now() - timedelta(days=random.randint(0, 30)) if random.choice([True, False]) else None,
             refunded_at=timezone.now() - timedelta(days=random.randint(0, 30)) if random.choice([True, False]) else None
         )
+
+# Hàm tạo thông báo
+def create_notifications(users, orders, products):
+    notification_types = ['order', 'promotion', 'product', 'system']
+    for user in users:
+        num_notifications = random.randint(1, 5)
+        for _ in range(num_notifications):
+            Notification.objects.create(
+                user=user,
+                title=fake.sentence(nb_words=6).replace('.', ''),
+                message=fake.text(max_nb_chars=200).replace('\n', ' '),
+                notification_type=random.choice(notification_types),
+                is_read=random.choice([True, False]),
+                related_order=random.choice(orders) if orders and random.choice([True, False]) else None,
+                related_product=random.choice(products) if products and random.choice([True, False]) else None
+            )
+
+# Hàm tạo đánh giá
+def create_reviews(customers, orders, products):
+    reviews = []
+    for customer in customers:
+        num_reviews = random.randint(1, 3)
+        selected_orders = random.sample(orders, min(num_reviews, len(orders))) if orders else []
+        for order in selected_orders:
+            if order.user == customer:
+                selected_products = [item.product for item in order.items.all()]
+                if selected_products:
+                    product = random.choice(selected_products)
+                    review = Review.objects.create(
+                        user=customer,
+                        product=product,
+                        order=order,
+                        rating=random.randint(1, 5),
+                        comment=fake.text(max_nb_chars=200).replace('\n', ' ')
+                    )
+                    reviews.append(review)
+    return reviews
+
+# Hàm tạo phản hồi đánh giá
+def create_review_replies(reviews, distributors, admins):
+    responders = distributors + admins
+    for review in reviews:
+        if random.choice([True, False]):
+            ReviewReply.objects.create(
+                review=review,
+                user=random.choice(responders),
+                comment=fake.text(max_nb_chars=150).replace('\n', ' ')
+            )
 
 # Hàm tạo token thiết bị
 def create_device_tokens(users):
@@ -214,20 +293,29 @@ def main():
     Order.objects.all().delete()
     Payment.objects.all().delete()
     DeviceToken.objects.all().delete()
+    Discount.objects.all().delete()
+    Notification.objects.all().delete()
+    Review.objects.all().delete()
+    ReviewReply.objects.all().delete()
 
     # Tạo dữ liệu
-    users = create_users(10)  # Tạo 10 người dùng
+    users = create_users(10)
     customers = [u for u in users if u.role == 'customer']
     distributors = [u for u in users if u.role == 'distributor']
+    admins = [u for u in users if u.role == 'admin']
     
-    categories = create_categories()  # Tạo danh mục y tế
-    products = create_products(20, distributors, categories)  # Tạo 20 sản phẩm
-    create_inventories(products, distributors)  # Tạo kho
-    carts = create_carts(customers)  # Tạo giỏ hàng
-    create_cart_items(carts, products)  # Tạo mục trong giỏ hàng
-    orders = create_orders(customers, products)  # Tạo đơn hàng
-    create_payments(orders)  # Tạo thanh toán
-    create_device_tokens(users)  # Tạo token thiết bị
+    categories = create_categories()
+    products = create_products(20, distributors, categories)
+    create_inventories(products, distributors)
+    discounts = create_discounts()
+    carts = create_carts(customers)
+    create_cart_items(carts, products)
+    orders = create_orders(customers, products, discounts)
+    create_payments(orders)
+    create_notifications(users, orders, products)
+    reviews = create_reviews(customers, orders, products)
+    create_review_replies(reviews, distributors, admins)
+    create_device_tokens(users)
 
     print("Dữ liệu giả y tế/dược phẩm đã được tạo thành công!")
 

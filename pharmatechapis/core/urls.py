@@ -12,6 +12,10 @@ router.register(r'payments', views.PaymentViewSet, basename='payment')
 router.register(r'chat-messages', views.ChatMessageViewSet, basename='chat-message')
 router.register(r'categories', views.CategoryViewSet, basename='category')
 router.register(r'inventory', views.InventoryViewSet, basename='inventory')
+router.register(r'discounts', views.DiscountViewSet, basename='discount')
+router.register(r'notifications', views.NotificationViewSet, basename='notification')
+router.register(r'reviews', views.ReviewViewSet, basename='review')
+router.register(r'review-replies', views.ReviewReplyViewSet, basename='review-reply')
 
 urlpatterns = [
     path('', include(router.urls)),

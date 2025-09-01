@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from rest_framework.filters import SearchFilter, OrderingFilter
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django_filters.rest_framework import DjangoFilterBackend
-from django.db.models import Sum, Count
+from django.db.models import Sum, Count, Avg
 from django.shortcuts import get_object_or_404
 from django.core.mail import send_mail
 from django.core.cache import cache
@@ -12,15 +12,15 @@ from django.conf import settings
 from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
-from .models import User, Product, Cart, CartItem, Order, OrderItem, Payment, DeviceToken, Category, Inventory
+from .models import User, Product, Cart, CartItem, Order, OrderItem, Payment, DeviceToken, Category, Inventory, Notification, Review, ReviewReply, Discount
 from .serializers import (
     UserSerializer, UserDetailSerializer, ProductSerializer, CartSerializer,
     CartItemSerializer, OrderSerializer, OrderItemSerializer, PaymentSerializer,
     DeviceTokenSerializer, AdminProductApprovalSerializer, CategorySerializer, InventorySerializer,
-    PasswordResetSerializer
+    PasswordResetSerializer, DiscountSerializer, NotificationSerializer, ReviewSerializer, ReviewReplySerializer
 )
 from .permissions import (
-    IsCustomer, IsDistributor, IsAdmin, IsCartOwner, IsOrderOwner, IsProductOwner, IsInventoryManager, IsCategoryManager, IsPaymentManager, IsConversationViewer
+    IsCustomer, IsDistributor, IsAdmin, IsCartOwner, IsOrderOwner, IsProductOwner, IsInventoryManager, IsCategoryManager, IsPaymentManager, IsConversationViewer, IsNotificationOwner, IsReviewOwner, IsAdminOrDistributor
 )
 from rest_framework.permissions import AllowAny
 from .paginators import ItemPaginator
@@ -78,16 +78,25 @@ def ping_view(request):
 @api_view(['GET'])
 @permission_classes([IsAdmin])
 def system_statistics(request):
+    orders = Order.objects.prefetch_related('items')
+    total_revenue = sum(order.total_amount for order in orders)
     total_users = User.objects.count()
-    total_orders = Order.objects.count()
-    total_revenue = Order.objects.aggregate(total=Sum('total_amount'))['total'] or 0
+    total_orders = orders.count()
     pending_products = Product.objects.filter(is_approved=False).count()
-    # Đếm tổng số tin nhắn từ Firebase
-    conversations = db.child('chat_messages').get().val() or {}
+
+    # ✅ Sửa đoạn này:
+    conversations_ref = db.reference('chat_messages')
+    conversations = conversations_ref.get() or {}
     total_interactions = sum(len(msgs) for msgs in conversations.values())
+
     trending_categories = OrderItem.objects.values('product__category').annotate(total_sold=Sum('quantity')).order_by('-total_sold')[:5]
     trending_products = OrderItem.objects.values('product__name').annotate(total_sold=Sum('quantity')).order_by('-total_sold')[:5]
-    
+
+    valid_discount_count = Discount.objects.filter(is_active=True).count()
+    review_count = Review.objects.count()
+    avg_rating = Review.objects.aggregate(avg_rating=Avg('rating'))['avg_rating'] or 0
+    unread_notification_count = Notification.objects.filter(is_read=False).count()
+
     return Response({
         'total_users': total_users,
         'total_orders': total_orders,
@@ -96,6 +105,10 @@ def system_statistics(request):
         'total_interactions': total_interactions,
         'trending_categories': list(trending_categories),
         'trending_products': list(trending_products),
+        'valid_discount_count': valid_discount_count,
+        'review_count': review_count,
+        'avg_rating': avg_rating,
+        'unread_notification_count': unread_notification_count,
     })
 
 # User ViewSet
@@ -414,31 +427,9 @@ class OrderViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.Retrie
         return self.queryset.filter(user=self.request.user)
 
     def create(self, request, *args, **kwargs):
-        user = request.user
-        cart_id = request.data.get('cart_id')
-        cart = get_object_or_404(Cart, id=cart_id, user=user)
-
-        if not cart.items.exists():
-            return Response({"error": "Giỏ hàng trống."}, status=status.HTTP_400_BAD_REQUEST)
-
-        total_amount = sum(item.product.price * item.quantity for item in cart.items.all())
-        order_code = str(uuid.uuid4())[:20]
-        order = Order.objects.create(
-            user=user,
-            order_code=order_code,
-            total_amount=total_amount,
-            status='pending'
-        )
-
-        for item in cart.items.all():
-            OrderItem.objects.create(
-                order=order,
-                product=item.product,
-                quantity=item.quantity,
-                price=item.product.price
-            )
-
-        cart.items.all().delete()
+        serializer = self.get_serializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        order = serializer.save()
         return Response(OrderSerializer(order).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'])
@@ -688,6 +679,185 @@ class InventoryViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.Up
         serializer = self.get_serializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         serializer.save(distributor=request.user)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+# Discount ViewSet
+class DiscountViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.UpdateAPIView, generics.DestroyAPIView, generics.RetrieveAPIView):
+    authentication_classes = [CustomOAuth2Authentication]
+    queryset = Discount.objects.all()
+    serializer_class = DiscountSerializer
+    pagination_class = ItemPaginator
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_fields = ['is_active', 'discount_type']
+    search_fields = ['code']
+    ordering_fields = ['created_at', 'discount_value']
+
+    def get_permissions(self):
+        if self.action in ['list', 'retrieve']:
+            return [AllowAny()]
+        elif self.action in ['create', 'update', 'partial_update', 'destroy']:
+            return [IsAdmin()]
+        return [permissions.IsAuthenticated()]
+
+    def get_queryset(self):
+        user = self.request.user
+        if self.action in ['list', 'retrieve']:
+            now = timezone.now()
+            return Discount.objects.filter(is_active=True, start_date__lte=now, end_date__gte=now)
+        return super().get_queryset()
+
+    @action(detail=False, methods=['post'], url_path='apply')
+    def apply_discount(self, request):
+        discount_code = request.data.get('discount_code')
+        order_id = request.data.get('order_id')
+
+        if not discount_code or not order_id:
+            return Response({'error': 'discount_code và order_id là bắt buộc.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            discount = Discount.objects.get(code=discount_code)
+        except Discount.DoesNotExist:
+            return Response({'error': 'Mã giảm giá không tồn tại.'}, status=status.HTTP_404_NOT_FOUND)
+
+        now = timezone.now()
+        if not discount.is_active or discount.start_date > now or discount.end_date < now:
+            return Response({'error': 'Mã giảm giá không hợp lệ hoặc đã hết hạn.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            order = Order.objects.get(id=order_id)
+        except Order.DoesNotExist:
+            return Response({'error': 'Đơn hàng không tồn tại.'}, status=status.HTTP_404_NOT_FOUND)
+
+        valid, message = discount.is_valid(order.total_amount)
+        if not valid:
+            return Response({'error': message}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Tính discount_amount
+        if discount.discount_type == 'percentage':
+            discount_amount = order.total_amount * (discount.discount_value / 100)
+            if discount.max_discount_amount:
+                discount_amount = min(discount_amount, discount.max_discount_amount)
+        else:
+            discount_amount = discount.discount_value
+
+        return Response({'discount_amount': str(discount_amount)}, status=status.HTTP_200_OK)
+
+# Notification ViewSet
+class NotificationViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAPIView, generics.UpdateAPIView):
+    authentication_classes = [CustomOAuth2Authentication]
+    serializer_class = NotificationSerializer
+    pagination_class = ItemPaginator
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_fields = ['is_read', 'notification_type']
+    search_fields = ['notification_type']
+    ordering_fields = ['created_at']
+
+    def get_permissions(self):
+        user = self.request.user
+        if user.role == 'admin':
+            return [IsAdmin()]
+        return [IsNotificationOwner()]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.role == 'admin':
+            return Notification.objects.all()
+        return Notification.objects.filter(user=user)
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
+    def retrieve(self, request, pk=None):
+        notification = self.get_object()
+        serializer = self.get_serializer(notification)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], url_path='mark-as-read')
+    def mark_as_read(self, request, pk=None):
+        notification = self.get_object()
+        notification.is_read = True
+        notification.save()
+        serializer = self.get_serializer(notification)
+        return Response(serializer.data)
+
+# Review ViewSet
+class ReviewViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.RetrieveAPIView, generics.UpdateAPIView, generics.DestroyAPIView):
+    authentication_classes = [CustomOAuth2Authentication]
+    queryset = Review.objects.all()
+    serializer_class = ReviewSerializer
+    pagination_class = ItemPaginator
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_fields = ['product', 'user', 'rating']
+    search_fields = ['comment']
+    ordering_fields = ['created_at', 'rating']
+
+    def get_permissions(self):
+        if self.action in ['list', 'retrieve']:
+            return [permissions.AllowAny()]
+        elif self.action == 'create':
+            return [IsCustomer()]
+        elif self.action in ['update', 'partial_update', 'destroy']:
+            return [IsReviewOwner(), IsAdminOrDistributor()]
+        return [permissions.IsAuthenticated()]
+
+    def get_queryset(self):
+        user = self.request.user
+        if self.action in ['list', 'retrieve'] and not user.is_authenticated:
+            return Review.objects.all()
+        elif user.role == 'customer':
+            return Review.objects.filter(user=user)
+        elif user.role == 'distributor':
+            return Review.objects.filter(product__distributor=user)
+        elif user.role == 'admin':
+            return Review.objects.all()
+        return Review.objects.none()
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        serializer.save(user=request.user)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+# ReviewReply ViewSet
+class ReviewReplyViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.RetrieveAPIView, generics.UpdateAPIView, generics.DestroyAPIView):
+    authentication_classes = [CustomOAuth2Authentication]
+    queryset = ReviewReply.objects.all()
+    serializer_class = ReviewReplySerializer
+    pagination_class = ItemPaginator
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_fields = ['review', 'user']
+    search_fields = ['reply']
+    ordering_fields = ['created_at']
+
+    def get_permissions(self):
+        if self.action in ['list', 'retrieve']:
+            return [permissions.AllowAny()]
+        elif self.action == 'create':
+            return [IsDistributor()]
+        elif self.action in ['update', 'partial_update', 'destroy']:
+            return [IsAdminOrDistributor()]
+        return [permissions.IsAuthenticated()]
+
+    def get_queryset(self):
+        user = self.request.user
+        if self.action in ['list', 'retrieve'] and not user.is_authenticated:
+            return ReviewReply.objects.all()
+        elif user.role == 'distributor':
+            return ReviewReply.objects.filter(user=user)
+        elif user.role == 'admin':
+            return ReviewReply.objects.all()
+        return ReviewReply.objects.none()
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        serializer.save(user=request.user)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 # ChatMessage ViewSet
