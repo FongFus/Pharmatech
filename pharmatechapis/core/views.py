@@ -392,7 +392,9 @@ class CartViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.UpdateA
     pagination_class = ItemPaginator
 
     def get_queryset(self):
-        return self.queryset.filter(user=self.request.user)
+        if self.request.user.is_authenticated:
+            return self.queryset.filter(user=self.request.user)
+        return self.queryset.none()
 
     @action(detail=True, methods=['post'], url_path='add-item')
     def add_item(self, request, pk=None):
@@ -424,7 +426,9 @@ class OrderViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.Retrie
     pagination_class = ItemPaginator
 
     def get_queryset(self):
-        return self.queryset.filter(user=self.request.user)
+        if self.request.user.is_authenticated:
+            return self.queryset.filter(user=self.request.user)
+        return self.queryset.none()
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data, context={'request': request})
@@ -467,10 +471,11 @@ class PaymentViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAP
         return [permissions.IsAuthenticated()]
 
     def get_queryset(self):
-        if self.request.user.role == 'customer':
-            return self.queryset.filter(user=self.request.user)
-        elif self.request.user.role == 'admin':
-            return self.queryset
+        if self.request.user.is_authenticated:
+            if self.request.user.role == 'customer':
+                return self.queryset.filter(user=self.request.user)
+            elif self.request.user.role == 'admin':
+                return self.queryset
         return Payment.objects.none()
 
     def retrieve(self, request, pk=None):
@@ -671,9 +676,13 @@ class InventoryViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.Up
     serializer_class = InventorySerializer
     permission_classes = [IsDistributor, IsInventoryManager]
     pagination_class = ItemPaginator
+    filter_backends = [SearchFilter]
+    search_fields = ['product_name']
 
     def get_queryset(self):
-        return self.queryset.filter(distributor=self.request.user)
+        if self.request.user.is_authenticated:
+            return self.queryset.filter(distributor=self.request.user)
+        return self.queryset.none()
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data, context={'request': request})
@@ -759,10 +768,12 @@ class NotificationViewSet(viewsets.ViewSet, generics.ListAPIView, generics.Retri
         return [IsNotificationOwner()]
 
     def get_queryset(self):
-        user = self.request.user
-        if user.role == 'admin':
-            return Notification.objects.all()
-        return Notification.objects.filter(user=user)
+        if self.request.user.is_authenticated:
+            user = self.request.user
+            if user.role == 'admin':
+                return Notification.objects.all()
+            return Notification.objects.filter(user=user)
+        return Notification.objects.none()
 
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
@@ -807,15 +818,16 @@ class ReviewViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.Retri
         return [permissions.IsAuthenticated()]
 
     def get_queryset(self):
-        user = self.request.user
-        if self.action in ['list', 'retrieve'] and not user.is_authenticated:
-            return Review.objects.all()
-        elif user.role == 'customer':
-            return Review.objects.filter(user=user)
-        elif user.role == 'distributor':
-            return Review.objects.filter(product__distributor=user)
-        elif user.role == 'admin':
-            return Review.objects.all()
+        if self.request.user.is_authenticated:
+            user = self.request.user
+            if self.action in ['list', 'retrieve']:
+                return Review.objects.all()
+            elif user.role == 'customer':
+                return Review.objects.filter(user=user)
+            elif user.role == 'distributor':
+                return Review.objects.filter(product__distributor=user)
+            elif user.role == 'admin':
+                return Review.objects.all()
         return Review.objects.none()
 
     def create(self, request, *args, **kwargs):
@@ -845,13 +857,14 @@ class ReviewReplyViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.
         return [permissions.IsAuthenticated()]
 
     def get_queryset(self):
-        user = self.request.user
-        if self.action in ['list', 'retrieve'] and not user.is_authenticated:
-            return ReviewReply.objects.all()
-        elif user.role == 'distributor':
-            return ReviewReply.objects.filter(user=user)
-        elif user.role == 'admin':
-            return ReviewReply.objects.all()
+        if self.request.user.is_authenticated:
+            user = self.request.user
+            if self.action in ['list', 'retrieve']:
+                return ReviewReply.objects.all()
+            elif user.role == 'distributor':
+                return ReviewReply.objects.filter(user=user)
+            elif user.role == 'admin':
+                return ReviewReply.objects.all()
         return ReviewReply.objects.none()
 
     def create(self, request, *args, **kwargs):

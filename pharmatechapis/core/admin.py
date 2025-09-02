@@ -1,11 +1,15 @@
 from django.contrib import admin
-from django.shortcuts import render
 from django.urls import path
 from django.template.response import TemplateResponse
-from .models import User, Product, Cart, CartItem, Order, OrderItem, Payment, DeviceToken, Category, ReviewReply, Discount, Notification, Review
 from django.db.models import Count, Sum, Avg
 from oauth2_provider.models import Application
+from .models import User, Product, Cart, CartItem, Order, OrderItem, Payment, DeviceToken, Category, Inventory, Discount, Notification, Review, ReviewReply
+from firebase_admin import db
+from django.conf import settings
+import pyrebase
 
+# Khởi tạo Firebase
+firebase = pyrebase.initialize_app(settings.FIREBASE_CONFIG)
 
 class PharmaTechAdminSite(admin.AdminSite):
     site_header = "PharmaTech Administration"
@@ -21,19 +25,20 @@ class PharmaTechAdminSite(admin.AdminSite):
 
     def system_stats(self, request):
         # Thống kê sản phẩm theo danh mục
-        product_stats = Product.objects.values('category').annotate(product_count=Count('id')).order_by('-product_count')
+        product_stats = Product.objects.values('category__name').annotate(product_count=Count('id')).order_by('-product_count')
         # Thống kê đơn hàng theo trạng thái
         order_stats = Order.objects.values('status').annotate(order_count=Count('id')).order_by('-order_count')
         # Tổng doanh thu
         revenue_stats = Payment.objects.filter(status='completed').aggregate(total_revenue=Sum('amount'))['total_revenue'] or 0
-        # Tổng số tương tác
-        total_interactions = 0  # Placeholder for interactions count
-        # Danh mục bán chạy (dựa trên số lượng bán trong OrderItem)
-        trending_categories = OrderItem.objects.values('product__category').annotate(total_sold=Sum('quantity')).order_by('-total_sold')[:5]
+        # Tổng số tương tác (từ Firebase, đồng bộ với views.py)
+        conversations_ref = db.reference('chat_messages')
+        conversations = conversations_ref.get() or {}
+        total_interactions = sum(len(msgs) for msgs in conversations.values()) if conversations else 0
+        # Danh mục bán chạy
+        trending_categories = OrderItem.objects.values('product__category__name').annotate(total_sold=Sum('quantity')).order_by('-total_sold')[:5]
         # Sản phẩm bán chạy
         trending_products = OrderItem.objects.values('product__name').annotate(total_sold=Sum('quantity')).order_by('-total_sold')[:5]
-
-        # Thêm thống kê mới theo yêu cầu
+        # Thống kê bổ sung
         valid_discount_count = Discount.objects.filter(is_active=True).count()
         review_count = Review.objects.count()
         avg_rating = Review.objects.aggregate(avg_rating=Avg('rating'))['avg_rating'] or 0
@@ -58,46 +63,116 @@ class ApplicationAdmin(admin.ModelAdmin):
     search_fields = ('name', 'client_id')
     list_filter = ('client_type', 'authorization_grant_type')
 
-admin_site = PharmaTechAdminSite(name='pharmatech_admin')
+# Tùy chỉnh giao diện quản trị cho User
+class UserAdmin(admin.ModelAdmin):
+    list_display = ('username', 'email', 'role', 'full_name', 'is_active', 'created_at')
+    list_filter = ('role', 'is_active')
+    search_fields = ('username', 'email', 'full_name', 'phone')
+    readonly_fields = ('created_at', 'updated_at')
 
-# Đăng ký các mô hình hiện có
-admin_site.register(User)
-admin_site.register(Product)
-admin_site.register(Cart)
-admin_site.register(CartItem)
-admin_site.register(Order)
-admin_site.register(OrderItem)
-admin_site.register(Payment)
-admin_site.register(DeviceToken)
-admin_site.register(Category)
+# Tùy chỉnh giao diện quản trị cho Product
+class ProductAdmin(admin.ModelAdmin):
+    list_display = ('name', 'distributor', 'category', 'price', 'total_stock', 'is_approved', 'created_at')
+    list_filter = ('is_approved', 'category', 'distributor')
+    search_fields = ('name', 'description')
+    readonly_fields = ('created_at', 'updated_at')
 
-# Đăng ký mô hình Discount với tùy chỉnh giao diện admin
+# Tùy chỉnh giao diện quản trị cho Inventory
+class InventoryAdmin(admin.ModelAdmin):
+    list_display = ('product', 'distributor', 'quantity', 'last_updated')
+    list_filter = ('distributor',)
+    search_fields = ('product__name',)
+    readonly_fields = ('last_updated',)
+
+# Tùy chỉnh giao diện quản trị cho Cart
+class CartAdmin(admin.ModelAdmin):
+    list_display = ('user', 'created_at', 'updated_at')
+    list_filter = ('user',)
+    search_fields = ('user__username',)
+    readonly_fields = ('created_at', 'updated_at')
+
+# Tùy chỉnh giao diện quản trị cho CartItem
+class CartItemAdmin(admin.ModelAdmin):
+    list_display = ('cart', 'product', 'quantity')
+    list_filter = ('cart__user',)
+    search_fields = ('product__name',)
+
+# Tùy chỉnh giao diện quản trị cho Order
+class OrderAdmin(admin.ModelAdmin):
+    list_display = ('order_code', 'user', 'total_amount', 'discount_amount', 'status', 'created_at')
+    list_filter = ('status', 'user')
+    search_fields = ('order_code', 'user__username')
+    readonly_fields = ('created_at', 'updated_at')
+
+# Tùy chỉnh giao diện quản trị cho OrderItem
+class OrderItemAdmin(admin.ModelAdmin):
+    list_display = ('order', 'product', 'quantity', 'price')
+    list_filter = ('order__user',)
+    search_fields = ('product__name', 'order__order_code')
+
+# Tùy chỉnh giao diện quản trị cho Payment
+class PaymentAdmin(admin.ModelAdmin):
+    list_display = ('order', 'user', 'amount', 'payment_method', 'status', 'paid_at')
+    list_filter = ('status', 'payment_method')
+    search_fields = ('order__order_code', 'user__username')
+    readonly_fields = ('created_at', 'paid_at', 'refunded_at')
+
+# Tùy chỉnh giao diện quản trị cho DeviceToken
+class DeviceTokenAdmin(admin.ModelAdmin):
+    list_display = ('user', 'token', 'device_type', 'created_at')
+    list_filter = ('device_type',)
+    search_fields = ('user__username', 'token')
+    readonly_fields = ('created_at', 'updated_at')
+
+# Tùy chỉnh giao diện quản trị cho Category
+class CategoryAdmin(admin.ModelAdmin):
+    list_display = ('name', 'description')
+    search_fields = ('name', 'description')
+
+# Tùy chỉnh giao diện quản trị cho Discount
 class DiscountAdmin(admin.ModelAdmin):
-    list_display = ('code', 'discount_type', 'discount_value', 'is_active', 'start_date', 'end_date')
+    list_display = ('code', 'discount_type', 'discount_value', 'is_active', 'start_date', 'end_date', 'uses_count')
     list_filter = ('is_active', 'discount_type')
+    search_fields = ('code', 'description')
+    readonly_fields = ('created_at', 'updated_at', 'uses_count')
 
-admin_site.register(Discount, DiscountAdmin)
-
-# Đăng ký mô hình Notification với tùy chỉnh giao diện admin
+# Tùy chỉnh giao diện quản trị cho Notification
 class NotificationAdmin(admin.ModelAdmin):
     list_display = ('user', 'title', 'notification_type', 'is_read', 'created_at')
     list_filter = ('is_read', 'notification_type')
+    search_fields = ('title', 'message', 'user__username')
+    readonly_fields = ('created_at', 'updated_at')
 
-admin_site.register(Notification, NotificationAdmin)
-
-# Đăng ký mô hình Review với tùy chỉnh giao diện admin
+# Tùy chỉnh giao diện quản trị cho Review
 class ReviewAdmin(admin.ModelAdmin):
-    list_display = ('user', 'product', 'rating', 'created_at')
+    list_display = ('user', 'product', 'rating', 'comment', 'created_at')
     list_filter = ('rating', 'product')
+    search_fields = ('comment', 'user__username', 'product__name')
+    readonly_fields = ('created_at', 'updated_at')
 
-admin_site.register(Review, ReviewAdmin)
-
-# Đăng ký mô hình ReviewReply với tùy chỉnh giao diện admin
+# Tùy chỉnh giao diện quản trị cho ReviewReply
 class ReviewReplyAdmin(admin.ModelAdmin):
     list_display = ('review', 'user', 'comment', 'created_at')
-    list_filter = ('review',)
+    list_filter = ('review__product', 'user')
+    search_fields = ('comment', 'user__username')
+    readonly_fields = ('created_at', 'updated_at')
 
+# Khởi tạo Admin Site
+admin_site = PharmaTechAdminSite(name='pharmatech_admin')
+
+# Đăng ký các mô hình
+admin_site.register(User, UserAdmin)
+admin_site.register(Product, ProductAdmin)
+admin_site.register(Inventory, InventoryAdmin)
+admin_site.register(Cart, CartAdmin)
+admin_site.register(CartItem, CartItemAdmin)
+admin_site.register(Order, OrderAdmin)
+admin_site.register(OrderItem, OrderItemAdmin)
+admin_site.register(Payment, PaymentAdmin)
+admin_site.register(DeviceToken, DeviceTokenAdmin)
+admin_site.register(Category, CategoryAdmin)
+admin_site.register(Discount, DiscountAdmin)
+admin_site.register(Notification, NotificationAdmin)
+admin_site.register(Review, ReviewAdmin)
 admin_site.register(ReviewReply, ReviewReplyAdmin)
-
-# Đăng ký mô hình Application của oauth2_provider
 admin_site.register(Application, ApplicationAdmin)
