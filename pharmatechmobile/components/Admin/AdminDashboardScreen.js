@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import { View, Text, TextInput, Button, FlatList, StyleSheet, ActivityIndicator, Alert, TouchableOpacity, Picker } from 'react-native';
 import { endpoints, authApis } from '../../configs/Apis';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { MyUserContext } from '../../configs/MyContexts';
 
 const AdminDashboardScreen = () => {
+  const user = useContext(MyUserContext);
   const [active_tab, setActiveTab] = useState('users');
   const [users, setUsers] = useState([]);
   const [products, setProducts] = useState([]);
@@ -19,6 +21,11 @@ const AdminDashboardScreen = () => {
 
   useEffect(() => {
     const fetchData = async () => {
+      if (!user || user.role !== 'admin') {
+        Alert.alert('Lỗi', 'Bạn không có quyền truy cập trang này.');
+        setLoading(false);
+        return;
+      }
       const token = await AsyncStorage.getItem('token');
       const authApi = authApis(token);
       try {
@@ -42,7 +49,10 @@ const AdminDashboardScreen = () => {
         setTotalCount(response.count);
         setNextPage(response.next);
         setPreviousPage(response.previous);
-        setStats({ visits: 100 }); // Giả lập, thay bằng API thật
+
+        // Fetch real statistics
+        const statsResponse = await authApi.get(endpoints.statistics);
+        setStats({ visits: statsResponse.total_interactions || 0 });
       } catch (error) {
         console.error('Fetch data error:', error.response?.data || error.message);
         Alert.alert('Lỗi', error.response?.data?.detail || 'Không thể tải dữ liệu');
@@ -51,7 +61,7 @@ const AdminDashboardScreen = () => {
       }
     };
     fetchData();
-  }, [active_tab, page, page_size, search_query, ordering]);
+  }, [active_tab, page, page_size, search_query, ordering, user]);
 
   const handleApproveProduct = async (product_id) => {
     setLoading(true);
@@ -59,9 +69,19 @@ const AdminDashboardScreen = () => {
     const authApi = authApis(token);
     try {
       await authApi.post(endpoints.productsApprove(product_id));
-      setProducts(products.map(product =>
-        product.id === product_id ? { ...product, status: 'approved' } : product
-      ));
+      // Refresh product list after approval
+      let url = `${endpoints.productsList}?page=${page}&page_size=${page_size}`;
+      if (search_query) {
+        url += `&search=${encodeURIComponent(search_query)}`;
+      }
+      if (ordering) {
+        url += `&ordering=${ordering}`;
+      }
+      const response = await authApi.get(url);
+      setProducts(response.results);
+      setTotalCount(response.count);
+      setNextPage(response.next);
+      setPreviousPage(response.previous);
       Alert.alert('Thành công', 'Đã duyệt sản phẩm');
     } catch (error) {
       console.error('Approve product error:', error.response?.data || error.message);
@@ -108,10 +128,10 @@ const AdminDashboardScreen = () => {
     <View style={styles.item}>
       <Text style={styles.title}>{item.name}</Text>
       <Text style={styles.detail}>Giá: {item.price} VND</Text>
-      <Text style={[styles.status, { color: item.status === 'approved' ? 'green' : '#FFD700' }]}>
-        Trạng thái: {item.status === 'approved' ? 'Đã duyệt' : 'Chờ duyệt'}
+      <Text style={[styles.status, { color: item.is_approved ? 'green' : '#FFD700' }]}>
+        Trạng thái: {item.is_approved ? 'Đã duyệt' : 'Chờ duyệt'}
       </Text>
-      {item.status !== 'approved' && (
+      {!item.is_approved && (
         <Button
           title="Duyệt"
           onPress={() => handleApproveProduct(item.id)}
@@ -226,7 +246,7 @@ const AdminDashboardScreen = () => {
         />
         <Button
           title="Cuối cùng"
-          onPress={() => setPage('last')}
+          onPress={() => setPage(totalPages)}
           disabled={!next_page}
           color="#007AFF"
         />

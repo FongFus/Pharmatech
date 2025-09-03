@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, TextInput, Button, FlatList, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import { endpoints, authApis } from '../../configs/Apis';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -7,14 +7,54 @@ const ChatScreen = () => {
   const [messages, setMessages] = useState([]);
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(true);
+  const [conversationId, setConversationId] = useState(null);
+  const flatListRef = useRef(null);
 
   useEffect(() => {
     const fetchChatHistory = async () => {
       const token = await AsyncStorage.getItem('token');
       const authApi = authApis(token);
       try {
-        const response = await authApi.get(endpoints.chatMessagesHistory);
-        setMessages(response.data);
+        if (!conversationId) {
+          // If no conversationId, fetch history without filter or set a default conversationId
+          const response = await authApi.get(endpoints.chatMessagesHistory);
+          const transformed = [];
+          response.history.forEach(item => {
+            // User message
+            transformed.push({
+              id: item.message_id + '_user',
+              message: item.message,
+              is_user: true,
+              created_at: item.created_at
+            });
+            // AI response
+            if (item.response) {
+              transformed.push({
+                id: item.message_id + '_ai',
+                message: item.response,
+                is_user: false,
+                created_at: item.created_at
+              });
+            }
+          });
+          setMessages(transformed);
+          if (response.history.length > 0) {
+            setConversationId(response.history[0].conversation_id);
+          }
+        } else {
+          // Fetch history by conversationId
+          const response = await authApi.get(endpoints.chatMessagesRealtime(conversationId));
+          const transformed = [];
+          response.messages.forEach(item => {
+            transformed.push({
+              id: item.message_id + (item.is_user ? '_user' : '_ai'),
+              message: item.message,
+              is_user: item.is_user,
+              created_at: item.created_at
+            });
+          });
+          setMessages(transformed);
+        }
       } catch (error) {
         Alert.alert('Lỗi', 'Không thể tải lịch sử chat');
       } finally {
@@ -22,15 +62,65 @@ const ChatScreen = () => {
       }
     };
     fetchChatHistory();
-  }, []);
+  }, [conversationId]);
+
+  useEffect(() => {
+    // Setup realtime listener if backend supports Firebase listener
+    let unsubscribe;
+    const setupRealtimeListener = async () => {
+      if (!conversationId) return;
+      const token = await AsyncStorage.getItem('token');
+      const authApi = authApis(token);
+      try {
+        // Polling or Firebase listener simulation
+        const intervalId = setInterval(async () => {
+          const response = await authApi.get(endpoints.chatMessagesRealtime(conversationId));
+          const transformed = [];
+          response.messages.forEach(item => {
+            transformed.push({
+              id: item.message_id + (item.is_user ? '_user' : '_ai'),
+              message: item.message,
+              is_user: item.is_user,
+              created_at: item.created_at
+            });
+          });
+          setMessages(transformed);
+          // Scroll to end on new messages
+          if (flatListRef.current) {
+            flatListRef.current.scrollToEnd({ animated: true });
+          }
+        }, 3000);
+        unsubscribe = () => clearInterval(intervalId);
+      } catch (error) {
+        console.error('Realtime listener error:', error);
+      }
+    };
+    setupRealtimeListener();
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, [conversationId]);
 
   const handleSendMessage = async () => {
     if (!message.trim()) return;
     const token = await AsyncStorage.getItem('token');
     const authApi = authApis(token);
     try {
-      const response = await authApi.post(endpoints.chatMessagesCreate, { message });
-      setMessages([...messages, response.data]);
+      const userMessage = {
+        message: message,
+        is_user: true,
+        created_at: new Date().toISOString(),
+        id: Date.now() // Temporary ID for frontend
+      };
+      setMessages([...messages, userMessage]);
+      const response = await authApi.post(endpoints.chatMessagesCreate, { message, conversation_id: conversationId });
+      const aiMessage = {
+        id: Date.now() + '_ai',
+        message: response.response,
+        is_user: false,
+        created_at: new Date().toISOString()
+      };
+      setMessages(prevMessages => [...prevMessages, aiMessage]);
       setMessage('');
     } catch (error) {
       Alert.alert('Lỗi', 'Gửi tin nhắn thất bại');
@@ -52,10 +142,12 @@ const ChatScreen = () => {
     <View style={styles.container}>
       <Text style={styles.header}>Trò chuyện với AI</Text>
       <FlatList
+        ref={flatListRef}
         data={messages}
         renderItem={renderItem}
         keyExtractor={item => item.id.toString()}
         ListEmptyComponent={<Text style={styles.warning}>Chưa có tin nhắn</Text>}
+        onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
       />
       <TextInput
         style={styles.input}

@@ -7,6 +7,7 @@ const endpoints = {
   usersLogout: `${BASE_URL}users/logout/`,
   usersMe: `${BASE_URL}users/current-user/`,
   usersChangeActiveState: `${BASE_URL}users/change-user-active-state/`,
+  passwordResetRequest: `${BASE_URL}users/password-reset-request/`,
   
   // Products
   productsList: `${BASE_URL}products/`,
@@ -30,14 +31,19 @@ const endpoints = {
   ordersRead: id => `${BASE_URL}orders/${id}/`,
   ordersUpdate: id => `${BASE_URL}orders/${id}/`,
   ordersDelete: id => `${BASE_URL}orders/${id}/`,
+  ordersCancel: id => `${BASE_URL}orders/${id}/cancel/`,
 
   // Payments
   paymentsCreate: `${BASE_URL}payments/`,
+  paymentsCreateStripePayment: `${BASE_URL}payments/create-stripe-payment/`,
   paymentsSuccess: `${BASE_URL}payments/success/`,
   paymentsCancel: `${BASE_URL}payments/cancel/`,
 
   // Chat
   chatMessages: `${BASE_URL}chat-messages/`,
+  chatMessagesHistory: `${BASE_URL}chat-messages/history/`,
+  chatMessagesCreate: `${BASE_URL}chat-messages/`,
+  chatMessagesRealtime: conversation_id => `${BASE_URL}chat-messages/realtime-messages/${conversation_id}/`,
 
   // Categories
   categoriesList: `${BASE_URL}categories/`,
@@ -51,12 +57,16 @@ const endpoints = {
   // Notifications
   notificationsList: `${BASE_URL}notifications/`,
   notificationsRead: id => `${BASE_URL}notifications/${id}/`,
+  notificationsMarkAsRead: id => `${BASE_URL}notifications/${id}/mark-as-read/`,
 
   // Reviews
   reviewsList: `${BASE_URL}reviews/`,
   reviewsCreate: `${BASE_URL}reviews/`,
   reviewsUpdate: id => `${BASE_URL}reviews/${id}/`,
   reviewsDelete: id => `${BASE_URL}reviews/${id}/`,
+
+  // Statistics
+  statistics: `${BASE_URL}statistics/`,
 };
 
 const authApis = (token) => ({
@@ -152,4 +162,29 @@ const authApis = (token) => ({
   },
 });
 
-export { endpoints, authApis, CLIENT_ID, CLIENT_SECRET };
+const nonAuthApis = {
+  post: async (url, data) => {
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(data),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(JSON.stringify({
+          status: response.status,
+          detail: result.detail || result.non_field_errors || result || 'Lỗi không xác định',
+        }));
+      }
+      return result;
+    } catch (error) {
+      console.error('POST error:', error.message);
+      throw error;
+    }
+  },
+};
+
+export { endpoints, authApis, nonAuthApis, CLIENT_ID, CLIENT_SECRET }

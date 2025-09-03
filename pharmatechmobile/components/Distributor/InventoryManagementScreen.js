@@ -1,14 +1,18 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, Button, FlatList, StyleSheet, ActivityIndicator, Alert, Picker } from 'react-native';
+import React, { useState, useEffect, useContext } from 'react';
+import { View, Text, TextInput, Button, FlatList, StyleSheet, ActivityIndicator, Alert, Picker, RefreshControl, TouchableOpacity } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { endpoints, authApis } from '../../configs/Apis';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { MyUserContext } from '../../configs/MyContexts';
 
 const InventoryManagementScreen = () => {
+  const user = useContext(MyUserContext);
   const [inventory, setInventory] = useState([]);
-  const [product_name, setProductName] = useState('');
+  const [products, setProducts] = useState([]);
+  const [selectedProduct, setSelectedProduct] = useState('');
   const [quantity, setQuantity] = useState('');
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [page, setPage] = useState(1);
   const [page_size, setPageSize] = useState(10);
   const [total_count, setTotalCount] = useState(0);
@@ -17,7 +21,28 @@ const InventoryManagementScreen = () => {
   const [search_query, setSearchQuery] = useState('');
   const navigation = useNavigation();
 
+  // Role check
+  if (!user || user.role !== 'distributor') {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.warning}>Bạn không có quyền truy cập trang này.</Text>
+      </View>
+    );
+  }
+
   useEffect(() => {
+    const fetchProducts = async () => {
+      const token = await AsyncStorage.getItem('token');
+      const authApi = authApis(token);
+      try {
+        const response = await authApi.get(`${endpoints.productsList}?page_size=1000`); // Fetch all products for selection
+        setProducts(response.results);
+      } catch (error) {
+        console.error('Fetch products error:', error.message);
+        Alert.alert('Lỗi', 'Không thể tải danh sách sản phẩm');
+      }
+    };
+
     const fetchInventory = async () => {
       const token = await AsyncStorage.getItem('token');
       const authApi = authApis(token);
@@ -32,18 +57,28 @@ const InventoryManagementScreen = () => {
         setNextPage(response.next);
         setPreviousPage(response.previous);
       } catch (error) {
-        console.error('Fetch inventory error:', error.response?.data || error.message);
-        Alert.alert('Lỗi', error.response?.data?.detail || 'Không thể tải danh sách kho');
+        console.error('Fetch inventory error:', error.message);
+        const errorData = JSON.parse(error.message);
+        Alert.alert('Lỗi', errorData.detail || errorData.non_field_errors || 'Không thể tải danh sách kho');
       } finally {
         setLoading(false);
+        setRefreshing(false);
       }
     };
+
+    fetchProducts();
     fetchInventory();
   }, [page, page_size, search_query]);
 
+  const onRefresh = () => {
+    setRefreshing(true);
+    setPage(1);
+    // The useEffect will trigger fetchInventory again
+  };
+
   const validateInputs = () => {
-    if (!product_name || !quantity) {
-      Alert.alert('Lỗi', 'Vui lòng nhập đầy đủ tên sản phẩm và số lượng');
+    if (!selectedProduct || !quantity) {
+      Alert.alert('Lỗi', 'Vui lòng chọn sản phẩm và nhập số lượng');
       return false;
     }
     if (isNaN(parseInt(quantity)) || parseInt(quantity) < 0) {
@@ -60,16 +95,17 @@ const InventoryManagementScreen = () => {
     const authApi = authApis(token);
     try {
       const response = await authApi.post(endpoints.inventoryCreate, {
-        product_name,
+        product_id: selectedProduct,
         quantity: parseInt(quantity),
       });
       setInventory([...inventory, response]);
-      setProductName('');
+      setSelectedProduct('');
       setQuantity('');
       Alert.alert('Thành công', 'Đã thêm vào kho');
     } catch (error) {
-      console.error('Add inventory error:', error.response?.data || error.message);
-      Alert.alert('Lỗi', error.response?.data?.detail || 'Thêm thất bại');
+      console.error('Add inventory error:', error.message);
+      const errorData = JSON.parse(error.message);
+      Alert.alert('Lỗi', errorData.detail || errorData.non_field_errors || 'Thêm thất bại');
     } finally {
       setLoading(false);
     }
@@ -145,12 +181,16 @@ const InventoryManagementScreen = () => {
         value={search_query}
         onChangeText={text => { setSearchQuery(text); setPage(1); }}
       />
-      <TextInput
-        style={styles.input}
-        placeholder="Nhập tên sản phẩm"
-        value={product_name}
-        onChangeText={setProductName}
-      />
+      <Picker
+        selectedValue={selectedProduct}
+        style={styles.picker}
+        onValueChange={(itemValue) => setSelectedProduct(itemValue)}
+      >
+        <Picker.Item label="Chọn sản phẩm" value="" />
+        {products.map(product => (
+          <Picker.Item key={product.id} label={product.name} value={product.id.toString()} />
+        ))}
+      </Picker>
       <TextInput
         style={styles.input}
         placeholder="Nhập số lượng"
@@ -177,6 +217,9 @@ const InventoryManagementScreen = () => {
         renderItem={renderItem}
         keyExtractor={item => item.id.toString()}
         ListEmptyComponent={<Text style={styles.warning}>Kho trống</Text>}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+        }
       />
       <View style={styles.pagination}>
         <Button
@@ -206,7 +249,7 @@ const InventoryManagementScreen = () => {
         />
         <Button
           title="Cuối cùng"
-          onPress={() => setPage('last')}
+          onPress={() => setPage(totalPages)}
           disabled={!next_page}
           color="#007AFF"
         />
@@ -234,6 +277,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     marginBottom: 16,
     paddingHorizontal: 10,
+    fontFamily: 'Roboto',
+    fontWeight: '400',
+  },
+  picker: {
+    height: 40,
+    borderColor: 'gray',
+    borderWidth: 1,
+    marginBottom: 16,
     fontFamily: 'Roboto',
     fontWeight: '400',
   },

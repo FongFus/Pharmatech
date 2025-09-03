@@ -1,37 +1,46 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import { View, Text, TextInput, Button, FlatList, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { endpoints, authApis } from '../../configs/Apis';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { MyUserContext } from '../../configs/MyContexts';
 
 const ReviewScreen = () => {
   const [reviews, setReviews] = useState([]);
   const [comment, setComment] = useState('');
   const [rating, setRating] = useState(4);
   const [loading, setLoading] = useState(true);
+  const [hasReviewed, setHasReviewed] = useState(false);
   const navigation = useNavigation();
   const route = useRoute();
   const { productId } = route.params;
+  const user = useContext(MyUserContext);
+
+  const fetchReviews = async () => {
+    const token = await AsyncStorage.getItem('token');
+    const authApi = authApis(token);
+    try {
+      const response = await authApi.get(endpoints.reviewsList, {
+        params: { product_id: productId },
+      });
+      setReviews(response.data);
+      setHasReviewed(response.data.some(r => r.user?.id === user?.id));
+    } catch (error) {
+      Alert.alert('Lỗi', 'Không thể tải đánh giá');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchReviews = async () => {
-      const token = await AsyncStorage.getItem('token');
-      const authApi = authApis(token);
-      try {
-        const response = await authApi.get(endpoints.reviewsList, {
-          params: { product_id: productId },
-        });
-        setReviews(response.data);
-      } catch (error) {
-        Alert.alert('Lỗi', 'Không thể tải đánh giá');
-      } finally {
-        setLoading(false);
-      }
-    };
     fetchReviews();
   }, [productId]);
 
   const handleSubmitReview = async () => {
+    if (rating < 1 || rating > 5) {
+      Alert.alert('Lỗi', 'Đánh giá từ 1-5');
+      return;
+    }
     const token = await AsyncStorage.getItem('token');
     const authApi = authApis(token);
     try {
@@ -40,12 +49,16 @@ const ReviewScreen = () => {
         comment,
         rating,
       });
-      setReviews([...reviews, response.data]);
+      fetchReviews();
       setComment('');
       setRating(4);
       Alert.alert('Thành công', 'Đã gửi đánh giá');
     } catch (error) {
-      Alert.alert('Lỗi', 'Gửi đánh giá thất bại');
+      if (error.response && error.response.status === 400) {
+        Alert.alert('Lỗi', 'Bạn đã đánh giá sản phẩm này');
+      } else {
+        Alert.alert('Lỗi', 'Gửi đánh giá thất bại');
+      }
     }
   };
 
@@ -64,21 +77,27 @@ const ReviewScreen = () => {
   return (
     <View style={styles.container}>
       <Text style={styles.header}>Đánh giá</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="Viết nhận xét..."
-        value={comment}
-        onChangeText={setComment}
-        multiline
-      />
-      <TextInput
-        style={styles.input}
-        placeholder="Đánh giá (1-5)"
-        value={rating.toString()}
-        keyboardType="numeric"
-        onChangeText={text => setRating(parseInt(text) || 4)}
-      />
-      <Button title="Gửi" onPress={handleSubmitReview} color="#007AFF" />
+      {hasReviewed ? (
+        <Text style={styles.warning}>Bạn đã đánh giá sản phẩm này</Text>
+      ) : (
+        <>
+          <TextInput
+            style={styles.input}
+            placeholder="Viết nhận xét..."
+            value={comment}
+            onChangeText={setComment}
+            multiline
+          />
+          <TextInput
+            style={styles.input}
+            placeholder="Đánh giá (1-5)"
+            value={rating.toString()}
+            keyboardType="numeric"
+            onChangeText={text => setRating(parseInt(text) || 4)}
+          />
+          <Button title="Gửi" onPress={handleSubmitReview} color="#007AFF" />
+        </>
+      )}
       <FlatList
         data={reviews}
         renderItem={renderItem}

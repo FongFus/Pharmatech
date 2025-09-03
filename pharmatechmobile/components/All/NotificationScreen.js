@@ -1,40 +1,64 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, FlatList, Button, StyleSheet, ActivityIndicator, Alert } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { View, Text, FlatList, Button, StyleSheet, ActivityIndicator, Alert, RefreshControl } from 'react-native';
 import { endpoints, authApis } from '../../configs/Apis';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const NotificationScreen = () => {
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [nextPageUrl, setNextPageUrl] = useState(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  const fetchNotifications = useCallback(async (url = endpoints.notificationsList, append = false) => {
+    const token = await AsyncStorage.getItem('token');
+    const authApi = authApis(token);
+    try {
+      const response = await authApi.get(url);
+      // response assumed to have pagination: results, next
+      const newNotifications = response.results || response.data || [];
+      if (append) {
+        setNotifications(prev => [...prev, ...newNotifications]);
+      } else {
+        setNotifications(newNotifications);
+      }
+      setNextPageUrl(response.next);
+    } catch (error) {
+      Alert.alert('Lỗi', 'Không thể lấy thông báo');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+      setLoadingMore(false);
+    }
+  }, []);
 
   useEffect(() => {
-    const fetchNotifications = async () => {
-      const token = await AsyncStorage.getItem('token');
-      const authApi = authApis(token);
-      try {
-        const response = await authApi.get(endpoints.notificationsList);
-        setNotifications(response.data);
-      } catch (error) {
-        Alert.alert('Lỗi', 'Không thể lấy thông báo');
-      } finally {
-        setLoading(false);
-      }
-    };
     fetchNotifications();
-  }, []);
+  }, [fetchNotifications]);
 
   const handleMarkAsRead = async (id) => {
     const token = await AsyncStorage.getItem('token');
     const authApi = authApis(token);
     try {
       await authApi.post(endpoints.notificationsMarkAsRead(id));
-      setNotifications(notifications.map(notif => 
-        notif.id === id ? { ...notif, is_read: true } : notif
-      ));
+      // Sau khi mark as read thành công, refetch lại danh sách để đồng bộ
+      fetchNotifications();
       Alert.alert('Thành công', 'Đã đánh dấu đã đọc');
     } catch (error) {
       Alert.alert('Lỗi', 'Lỗi khi cập nhật');
     }
+  };
+
+  const handleLoadMore = () => {
+    if (nextPageUrl && !loadingMore) {
+      setLoadingMore(true);
+      fetchNotifications(nextPageUrl, true);
+    }
+  };
+
+  const onRefresh = () => {
+    setRefreshing(true);
+    fetchNotifications();
   };
 
   const renderItem = ({ item }) => (
@@ -59,6 +83,11 @@ const NotificationScreen = () => {
         data={notifications}
         renderItem={renderItem}
         keyExtractor={item => item.id.toString()}
+        onEndReached={handleLoadMore}
+        onEndReachedThreshold={0.5}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+        }
       />
     </View>
   );

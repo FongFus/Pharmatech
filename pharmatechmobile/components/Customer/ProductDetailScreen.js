@@ -27,15 +27,76 @@ const ProductDetailScreen = () => {
     fetchProduct();
   }, [productId]);
 
-  const handleAddToCart = async () => {
+  const getCartId = async () => {
     const token = await AsyncStorage.getItem('token');
     const authApi = authApis(token);
     try {
-      await authApi.post(endpoints.cartsAddItem(productId), { quantity: 1 });
-      Alert.alert('Thành công', 'Đã thêm vào giỏ hàng');
-      navigation.navigate('CartScreen');
+      const response = await authApi.get(endpoints.cartsList);
+      const carts = response.data || [];
+      if (carts.length > 0) {
+        return carts[0].id; // Assume the first cart is the active one
+      } else {
+        // Create a new cart
+        const createResponse = await authApi.post(endpoints.cartsList, {});
+        return createResponse.data.id;
+      }
     } catch (error) {
-      Alert.alert('Lỗi', 'Không thể thêm vào giỏ hàng');
+      throw new Error('Không thể lấy giỏ hàng');
+    }
+  };
+
+  const handleAddToCart = async () => {
+    if (!product.quantity || product.quantity <= 0) {
+      Alert.alert('Lỗi', 'Sản phẩm hết hàng');
+      return;
+    }
+    const token = await AsyncStorage.getItem('token');
+    const authApi = authApis(token);
+    try {
+      const cartId = await getCartId();
+      await authApi.post(endpoints.cartsAddItem(cartId), { product_id: productId, quantity: 1 });
+      Alert.alert('Thành công', 'Đã thêm vào giỏ hàng');
+      navigation.navigate('CartScreen', { productId });
+    } catch (error) {
+      let errorMessage = 'Không thể thêm vào giỏ hàng';
+      try {
+        const errorData = JSON.parse(error.message);
+        if (errorData.status === 400) {
+          errorMessage = errorData.detail || 'Sản phẩm hết hàng hoặc không khả dụng';
+        } else if (errorData.status === 404) {
+          errorMessage = 'Giỏ hàng không tồn tại';
+        }
+      } catch (parseError) {
+        // If not JSON, use default
+      }
+      Alert.alert('Lỗi', errorMessage);
+    }
+  };
+
+  const handleBuyNow = async () => {
+    if (!product.quantity || product.quantity <= 0) {
+      Alert.alert('Lỗi', 'Sản phẩm hết hàng');
+      return;
+    }
+    const token = await AsyncStorage.getItem('token');
+    const authApi = authApis(token);
+    try {
+      const orderResponse = await authApi.post(endpoints.ordersCreate, {
+        items: [{ product_id: productId, quantity: 1 }]
+      });
+      Alert.alert('Thành công', 'Đã tạo đơn hàng');
+      navigation.navigate('PaymentScreen', { orderId: orderResponse.id });
+    } catch (error) {
+      let errorMessage = 'Không thể tạo đơn hàng';
+      try {
+        const errorData = JSON.parse(error.message);
+        if (errorData.status === 400) {
+          errorMessage = errorData.detail || 'Sản phẩm hết hàng hoặc không khả dụng';
+        }
+      } catch (parseError) {
+        // If not JSON, use default
+      }
+      Alert.alert('Lỗi', errorMessage);
     }
   };
 
@@ -58,7 +119,7 @@ const ProductDetailScreen = () => {
       <Button title="Thêm vào giỏ" onPress={handleAddToCart} color="#007AFF" />
       <Button
         title="Mua ngay"
-        onPress={() => Alert.alert('Thông báo', 'Chức năng mua ngay đang phát triển')}
+        onPress={handleBuyNow}
         color="#007AFF"
       />
       <Button

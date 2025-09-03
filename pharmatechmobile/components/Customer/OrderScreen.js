@@ -9,19 +9,20 @@ const OrderScreen = () => {
   const [loading, setLoading] = useState(true);
   const navigation = useNavigation();
 
+  const fetchOrders = async () => {
+    const token = await AsyncStorage.getItem('token');
+    const authApi = authApis(token);
+    try {
+      const response = await authApi.get(endpoints.ordersList);
+      setOrders(response.data);
+    } catch (error) {
+      Alert.alert('Lỗi', 'Không thể tải đơn hàng');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    const fetchOrders = async () => {
-      const token = await AsyncStorage.getItem('token');
-      const authApi = authApis(token);
-      try {
-        const response = await authApi.get(endpoints.ordersList);
-        setOrders(response.data);
-      } catch (error) {
-        Alert.alert('Lỗi', 'Không thể tải đơn hàng');
-      } finally {
-        setLoading(false);
-      }
-    };
     fetchOrders();
   }, []);
 
@@ -30,10 +31,8 @@ const OrderScreen = () => {
     const authApi = authApis(token);
     try {
       await authApi.post(endpoints.ordersCancel(orderId));
-      setOrders(orders.map(order =>
-        order.id === orderId ? { ...order, status: 'cancelled' } : order
-      ));
       Alert.alert('Thành công', 'Đã hủy đơn hàng');
+      fetchOrders(); // Refetch to ensure sync with backend
     } catch (error) {
       Alert.alert('Lỗi', 'Hủy đơn hàng thất bại');
     }

@@ -1,5 +1,5 @@
 import React, { useState, useContext } from 'react';
-import { View, Text, TextInput, Button, StyleSheet, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, Button, StyleSheet, Alert, ActivityIndicator, TouchableOpacity } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { endpoints, authApis, CLIENT_ID, CLIENT_SECRET } from '../../configs/Apis';
 import { MyDispatchContext } from '../../configs/MyContexts';
@@ -38,11 +38,30 @@ const LoginScreen = ({ navigation }) => {
         Alert.alert('Thành công', 'Đăng nhập thành công!');
         navigation.replace(userResponse.role === 'admin' ? 'AdminDashboardScreen' : 'HomeScreen');
       } else {
-        Alert.alert('Lỗi', data.error_description || 'Đăng nhập thất bại. Vui lòng kiểm tra lại thông tin.');
+        // Cải thiện error handling cho login
+        if (data.error === 'invalid_grant') {
+          Alert.alert('Lỗi', 'Sai thông tin đăng nhập. Vui lòng kiểm tra email và mật khẩu.');
+        } else {
+          Alert.alert('Lỗi', data.error_description || 'Đăng nhập thất bại. Vui lòng kiểm tra lại thông tin.');
+        }
       }
     } catch (error) {
-      console.error('Login error:', error.response?.data || error.message);
-      Alert.alert('Lỗi', error.response?.data?.error_description || 'Đã có lỗi xảy ra. Vui lòng thử lại.');
+      console.error('Login error:', error.message);
+      // Parse error chi tiết hơn
+      try {
+        const errorData = JSON.parse(error.message);
+        if (errorData.status === 400) {
+          Alert.alert('Lỗi', 'Dữ liệu không hợp lệ. Vui lòng kiểm tra thông tin nhập.');
+        } else if (errorData.status === 401) {
+          Alert.alert('Lỗi', 'Sai thông tin đăng nhập. Vui lòng kiểm tra email và mật khẩu.');
+        } else if (errorData.status === 403) {
+          Alert.alert('Lỗi', 'Tài khoản của bạn đã bị vô hiệu hóa.');
+        } else {
+          Alert.alert('Lỗi', errorData.detail || 'Đã có lỗi xảy ra. Vui lòng thử lại.');
+        }
+      } catch (parseError) {
+        Alert.alert('Lỗi', 'Đã có lỗi xảy ra. Vui lòng thử lại.');
+      }
     } finally {
       setLoading(false);
     }
@@ -70,6 +89,9 @@ const LoginScreen = ({ navigation }) => {
       ) : (
         <>
           <Button title="Đăng nhập" onPress={handleLogin} color="#007AFF" />
+          <TouchableOpacity onPress={() => navigation.navigate('ForgotPasswordScreen')}>
+            <Text style={styles.forgotPassword}>Quên mật khẩu?</Text>
+          </TouchableOpacity>
           <Button
             title="Đăng ký"
             onPress={() => navigation.navigate('RegisterScreen')}
@@ -100,6 +122,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     marginBottom: 16,
     paddingHorizontal: 10,
+    fontFamily: 'Roboto',
+    fontWeight: '400',
+  },
+  forgotPassword: {
+    color: '#007AFF',
+    textAlign: 'center',
+    marginVertical: 10,
+    fontSize: 16,
     fontFamily: 'Roboto',
     fontWeight: '400',
   },

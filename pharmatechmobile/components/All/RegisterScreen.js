@@ -1,20 +1,31 @@
 import React, { useState } from 'react';
 import { View, Text, TextInput, Button, StyleSheet, ActivityIndicator, Alert, Image } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
-import { endpoints, Apis } from '../../configs/Apis';
+import { endpoints, nonAuthApis } from '../../configs/Apis';
 
 const RegisterScreen = () => {
   const [username, setUsername] = useState('');
+  const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const navigation = useNavigation();
 
   const handleRegister = async () => {
+    if (password !== confirmPassword) {
+      Alert.alert('Lỗi', 'Mật khẩu xác nhận không khớp');
+      return;
+    }
+    if (!fullName.trim()) {
+      Alert.alert('Lỗi', 'Vui lòng nhập họ và tên');
+      return;
+    }
     setLoading(true);
     try {
-      const response = await Apis.post(endpoints.usersCreate, {
+      const response = await nonAuthApis.post(endpoints.register, {
         username,
+        full_name: fullName,
         email,
         password,
       });
@@ -39,6 +50,12 @@ const RegisterScreen = () => {
       />
       <TextInput
         style={styles.input}
+        placeholder="Nhập họ và tên"
+        value={fullName}
+        onChangeText={setFullName}
+      />
+      <TextInput
+        style={styles.input}
         placeholder="Nhập email"
         value={email}
         onChangeText={setEmail}
@@ -49,6 +66,13 @@ const RegisterScreen = () => {
         secureTextEntry
         value={password}
         onChangeText={setPassword}
+      />
+      <TextInput
+        style={styles.input}
+        placeholder="Xác nhận mật khẩu"
+        secureTextEntry
+        value={confirmPassword}
+        onChangeText={setConfirmPassword}
       />
       {loading ? (
         <ActivityIndicator size="large" color="#007AFF" />

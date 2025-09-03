@@ -17,12 +17,14 @@ import HomeScreen from './components/Customer/HomeScreen';
 import ProductDetailScreen from './components/Customer/ProductDetailScreen';
 import CartScreen from './components/Customer/CartScreen';
 import OrderScreen from './components/Customer/OrderScreen';
+import OrderDetailScreen from './components/Customer/OrderDetailScreen';
 import PaymentScreen from './components/Customer/PaymentScreen';
 import ReviewScreen from './components/Customer/ReviewScreen';
 import ChatScreen from './components/Customer/ChatScreen';
 import EditProductScreen from './components/Distributor/EditProductScreen';
 import InventoryManagementScreen from './components/Distributor/InventoryManagementScreen';
 import AdminDashboardScreen from './components/Admin/AdminDashboardScreen';
+import ForgotPasswordScreen from './components/All/ForgotPasswordScreen';
 
 const Stack = createStackNavigator();
 
@@ -37,12 +39,14 @@ export default function App() {
             <Stack.Screen name="SplashScreen" component={SplashScreen} />
             <Stack.Screen name="LoginScreen" component={LoginScreen} />
             <Stack.Screen name="RegisterScreen" component={RegisterScreen} />
+            <Stack.Screen name="ForgotPasswordScreen" component={ForgotPasswordScreen} />
             <Stack.Screen name="ProfileScreen" component={ProfileScreen} />
             <Stack.Screen name="NotificationScreen" component={NotificationScreen} />
             <Stack.Screen name="HomeScreen" component={HomeScreen} />
             <Stack.Screen name="ProductDetailScreen" component={ProductDetailScreen} />
             <Stack.Screen name="CartScreen" component={CartScreen} />
             <Stack.Screen name="OrderScreen" component={OrderScreen} />
+            <Stack.Screen name="OrderDetailScreen" component={OrderDetailScreen} />
             <Stack.Screen name="PaymentScreen" component={PaymentScreen} />
             <Stack.Screen name="ReviewScreen" component={ReviewScreen} />
             <Stack.Screen name="ChatScreen" component={ChatScreen} />

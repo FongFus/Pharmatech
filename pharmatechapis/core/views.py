@@ -305,7 +305,7 @@ class ProductViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIV
     serializer_class = ProductSerializer
     pagination_class = ItemPaginator
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
-    filterset_fields = ['category', 'is_approved']
+    filterset_fields = ['category', 'is_approved', 'price__gte', 'price__lte']
     search_fields = ['name', 'description']
     ordering_fields = ['price', 'created_at']
     parser_classes = [MultiPartParser, FormParser, JSONParser]

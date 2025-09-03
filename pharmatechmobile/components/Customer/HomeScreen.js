@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, Button, FlatList, Image, StyleSheet, ActivityIndicator, Alert } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { View, Text, TextInput, Button, FlatList, Image, StyleSheet, ActivityIndicator, Alert, RefreshControl, Picker } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { endpoints, authApis } from '../../configs/Apis';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -8,40 +8,105 @@ const HomeScreen = () => {
   const [products, setProducts] = useState([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  const [categories, setCategories] = useState([]);
+  const [selectedCategory, setSelectedCategory] = useState('');
+  const [minPrice, setMinPrice] = useState('');
+  const [maxPrice, setMaxPrice] = useState('');
+  const [loadingMore, setLoadingMore] = useState(false);
   const navigation = useNavigation();
 
-  useEffect(() => {
-    const fetchProducts = async () => {
-      const token = await AsyncStorage.getItem('token');
-      const authApi = authApis(token);
-      try {
-        const response = await authApi.get(endpoints.productsList, {
-          params: { search },
-        });
-        setProducts(response.data);
-      } catch (error) {
-        Alert.alert('Lỗi', 'Không tìm thấy sản phẩm');
-      } finally {
-        setLoading(false);
+  const fetchCategories = async () => {
+    const token = await AsyncStorage.getItem('token');
+    const authApi = authApis(token);
+    try {
+      const response = await authApi.get(endpoints.categoriesList);
+      setCategories(response.data || []);
+    } catch (error) {
+      console.error('Error fetching categories:', error);
+    }
+  };
+
+  const fetchProducts = async (pageNumber = 1, refreshing = false) => {
+    if (refreshing) {
+      setRefreshing(true);
+    } else if (pageNumber === 1) {
+      setLoading(true);
+    } else {
+      setLoadingMore(true);
+    }
+    const token = await AsyncStorage.getItem('token');
+    const authApi = authApis(token);
+    try {
+      const params = {
+        search,
+        page: pageNumber,
+        ...(selectedCategory && { category: selectedCategory }),
+        ...(minPrice && { price__gte: minPrice }),
+        ...(maxPrice && { price__lte: maxPrice }),
+      };
+      const response = await authApi.get(endpoints.productsList, { params });
+      const newProducts = response.results || [];
+      if (pageNumber === 1) {
+        setProducts(newProducts);
+      } else {
+        setProducts(prevProducts => [...prevProducts, ...newProducts]);
       }
-    };
-    fetchProducts();
+      setHasMore(!!response.next);
+      setPage(pageNumber);
+    } catch (error) {
+      Alert.alert('Lỗi', 'Không tìm thấy sản phẩm');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+      setLoadingMore(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchCategories();
+    fetchProducts(1);
+  }, [search, selectedCategory, minPrice, maxPrice]);
+
+  const handleLoadMore = () => {
+    if (hasMore && !loading && !refreshing && !loadingMore) {
+      fetchProducts(page + 1);
+    }
+  };
+
+  const onRefresh = useCallback(() => {
+    fetchProducts(1, true);
   }, [search]);
 
   const renderItem = ({ item }) => (
     <View style={styles.item}>
-      <Image source={{ uri: item.image }} style={styles.image} />
+      {item.image ? (
+        <Image source={{ uri: item.image }} style={styles.image} />
+      ) : (
+        <View style={[styles.image, styles.imagePlaceholder]}>
+          <Text style={styles.imagePlaceholderText}>No Image</Text>
+        </View>
+      )}
       <Text style={styles.title}>{item.name}</Text>
       <Text style={styles.price}>{item.price} VND</Text>
-      <Button
-        title="Xem chi tiết"
-        onPress={() => navigation.navigate('ProductDetailScreen', { productId: item.id })}
-        color="#007AFF"
-      />
+      <View style={styles.buttonContainer}>
+        <Button
+          title="Xem chi tiết"
+          onPress={() => navigation.navigate('ProductDetailScreen', { productId: item.id })}
+          color="#007AFF"
+        />
+        <Button
+          title="Thêm vào giỏ"
+          onPress={() => navigation.navigate('CartScreen', { productId: item.id })}
+          color="#28A745"
+        />
+      </View>
     </View>
   );
 
-  if (loading) {
+  if (loading && page === 1 && !refreshing) {
     return <ActivityIndicator size="large" color="#007AFF" />;
   }
 
@@ -54,12 +119,41 @@ const HomeScreen = () => {
         value={search}
         onChangeText={setSearch}
       />
-      <Button title="Bộ lọc" onPress={() => Alert.alert('Thông báo', 'Chức năng bộ lọc đang phát triển')} color="#007AFF" />
+      <View style={styles.filters}>
+        <Picker
+          selectedValue={selectedCategory}
+          onValueChange={(itemValue) => setSelectedCategory(itemValue)}
+          style={styles.picker}
+        >
+          <Picker.Item label="Tất cả danh mục" value="" />
+          {categories.map(cat => (
+            <Picker.Item key={cat.id} label={cat.name} value={cat.id} />
+          ))}
+        </Picker>
+        <TextInput
+          style={styles.priceInput}
+          placeholder="Giá tối thiểu"
+          value={minPrice}
+          onChangeText={setMinPrice}
+          keyboardType="numeric"
+        />
+        <TextInput
+          style={styles.priceInput}
+          placeholder="Giá tối đa"
+          value={maxPrice}
+          onChangeText={setMaxPrice}
+          keyboardType="numeric"
+        />
+      </View>
       <FlatList
         data={products}
         renderItem={renderItem}
         keyExtractor={item => item.id.toString()}
         ListEmptyComponent={<Text style={styles.warning}>Không tìm thấy sản phẩm</Text>}
+        ListFooterComponent={loadingMore ? <ActivityIndicator size="small" color="#007AFF" /> : null}
+        onEndReached={handleLoadMore}
+        onEndReachedThreshold={0.5}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       />
     </View>
   );
@@ -98,6 +192,15 @@ const styles = StyleSheet.create({
     height: 100,
     marginBottom: 8,
   },
+  imagePlaceholder: {
+    backgroundColor: '#ccc',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  imagePlaceholderText: {
+    color: '#666',
+    fontSize: 14,
+  },
   title: {
     fontSize: 18,
     fontFamily: 'Roboto',
@@ -108,6 +211,24 @@ const styles = StyleSheet.create({
     fontFamily: 'Roboto',
     fontWeight: '400',
   },
+  filters: {
+    marginBottom: 12,
+  },
+  picker: {
+    height: 40,
+    borderColor: 'gray',
+    borderWidth: 1,
+    marginBottom: 8,
+  },
+  priceInput: {
+    height: 40,
+    borderColor: 'gray',
+    borderWidth: 1,
+    marginBottom: 8,
+    paddingHorizontal: 10,
+    fontFamily: 'Roboto',
+    fontWeight: '400',
+  },
   warning: {
     fontSize: 16,
     fontFamily: 'Roboto-Italic',
@@ -115,6 +236,11 @@ const styles = StyleSheet.create({
     color: 'red',
     textAlign: 'center',
     marginTop: 20,
+  },
+  buttonContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 8,
   },
 });
 
