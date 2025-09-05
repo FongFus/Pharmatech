@@ -17,7 +17,7 @@ const ForgotPasswordScreen = () => {
     try {
       await nonAuthApis.post(endpoints.passwordResetRequest, { email });
       Alert.alert('Thành công', 'Mã xác nhận đã được gửi đến email của bạn. Vui lòng kiểm tra hộp thư.');
-      navigation.goBack();
+      navigation.navigate('ResetPasswordScreen', { email });
     } catch (error) {
       console.error('Forgot password error:', error.message);
       try {

@@ -21,10 +21,10 @@ const ReviewScreen = () => {
     const authApi = authApis(token);
     try {
       const response = await authApi.get(endpoints.reviewsList, {
-        params: { product_id: productId },
+        params: { product: productId },
       });
-      setReviews(response.data);
-      setHasReviewed(response.data.some(r => r.user?.id === user?.id));
+      setReviews(response.data.results);
+      setHasReviewed(response.data.results.some(r => r.user?.id === user?.id));
     } catch (error) {
       Alert.alert('Lỗi', 'Không thể tải đánh giá');
     } finally {

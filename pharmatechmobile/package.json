@@ -12,13 +12,15 @@
     "@expo/vector-icons": "^14.1.0",
     "@jsamr/counter-style": "^2.0.2",
     "@notifee/react-native": "^9.1.8",
+    "@ptomasroos/react-native-multi-slider": "^2.2.2",
     "@react-native-async-storage/async-storage": "^2.2.0",
     "@react-native-community/datetimepicker": "^8.3.0",
     "@react-native-community/netinfo": "^11.4.1",
+    "@react-native-community/slider": "^5.0.1",
     "@react-native-firebase/app": "^22.2.0",
     "@react-native-firebase/messaging": "^22.2.0",
     "@react-native-picker/picker": "^2.11.1",
-    "@react-navigation/bottom-tabs": "^7.3.14",
+    "@react-navigation/bottom-tabs": "^7.4.7",
     "@react-navigation/drawer": "^7.3.12",
     "@react-navigation/native": "^7.1.17",
     "@react-navigation/native-stack": "^7.3.26",
@@ -33,6 +35,7 @@
     "moment": "^2.30.1",
     "moment-timezone": "^0.6.0",
     "react": "^19.0.0",
+    "react-dom": "^19.0.0",
     "react-native": "^0.79.2",
     "react-native-chart-kit": "^6.12.0",
     "react-native-config": "^1.5.5",
@@ -41,6 +44,7 @@
     "react-native-image-picker": "^8.2.0",
     "react-native-linear-gradient": "^2.8.3",
     "react-native-maps": "^1.20.1",
+    "react-native-modal": "^14.0.0-rc.1",
     "react-native-pager-view": "6.7.1",
     "react-native-paper": "^5.14.5",
     "react-native-reanimated": "~3.17.4",
@@ -54,7 +58,8 @@
     "zustand": "^5.0.5"
   },
   "devDependencies": {
-    "@babel/core": "^7.20.0"
+    "@babel/core": "^7.20.0",
+    "metro-react-native-babel-preset": "^0.77.0"
   },
   "private": true
 }

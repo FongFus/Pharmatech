@@ -37,7 +37,7 @@ schema_view = get_schema_view(
 )
 
 urlpatterns = [
-    path('api/v1/', include('core.urls')),  # API endpoints with version prefix
+    path('', include('core.urls')),  # API endpoints with version prefix
     path('admin/', admin_site.urls),  # Custom admin site
     path('o/', include('oauth2_provider.urls', namespace='oauth2_provider')),  # OAuth2 endpoints
     path('swagger<format>.json|.yaml', schema_view.without_ui(cache_timeout=0), name='schema-json'),

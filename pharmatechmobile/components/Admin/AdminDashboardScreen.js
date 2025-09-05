@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { View, Text, TextInput, Button, FlatList, StyleSheet, ActivityIndicator, Alert, TouchableOpacity, Picker } from 'react-native';
+import { View, Text, TextInput, Button, FlatList, StyleSheet, ActivityIndicator, Alert, TouchableOpacity } from 'react-native';
+import { Picker } from '@react-native-picker/picker';
 import { endpoints, authApis } from '../../configs/Apis';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MyUserContext } from '../../configs/MyContexts';
 
 const AdminDashboardScreen = () => {
-  const user = useContext(MyUserContext);
+  const { user } = useContext(MyUserContext);
   const [active_tab, setActiveTab] = useState('users');
   const [users, setUsers] = useState([]);
   const [products, setProducts] = useState([]);

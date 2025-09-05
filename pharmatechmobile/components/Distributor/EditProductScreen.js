@@ -19,7 +19,7 @@ const EditProductScreen = () => {
   const navigation = useNavigation();
   const route = useRoute();
   const { product_id } = route.params || {};
-  const user = useContext(MyUserContext);
+  const { user } = useContext(MyUserContext);
 
   useEffect(() => {
     if (user && user.role !== 'distributor') {

@@ -1,66 +1,74 @@
 import React, { useState, useContext } from 'react';
-import { View, Text, TextInput, Button, StyleSheet, Alert, ActivityIndicator, TouchableOpacity } from 'react-native';
+import { View, StyleSheet } from 'react-native';
+import { TextInput, Button, HelperText, Title } from 'react-native-paper';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { endpoints, authApis, CLIENT_ID, CLIENT_SECRET } from '../../configs/Apis';
+import { endpoints, authApis, nonAuthApis, CLIENT_ID, CLIENT_SECRET } from '../../configs/Apis';
 import { MyDispatchContext } from '../../configs/MyContexts';
 
 const LoginScreen = ({ navigation }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const [showPassword, setShowPassword] = useState(false);
   const dispatch = useContext(MyDispatchContext);
 
   const handleLogin = async () => {
     if (!email || !password) {
-      Alert.alert('Lỗi', 'Vui lòng nhập đầy đủ email và mật khẩu');
+      setMsg('Vui lòng nhập đầy đủ email và mật khẩu');
       return;
     }
     setLoading(true);
+    setMsg(null);
+
     try {
-      const formData = new FormData();
-      formData.append('grant_type', 'password');
-      formData.append('client_id', CLIENT_ID);
-      formData.append('client_secret', CLIENT_SECRET);
-      formData.append('username', email);
-      formData.append('password', password);
+      // Chuẩn bị dữ liệu JSON cho yêu cầu đăng nhập OAuth2
+      const data = {
+        grant_type: 'password',
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
+        username: email,
+        password: password,
+      };
 
-      const response = await fetch(endpoints.login, {
-        method: 'POST',
-        body: formData,
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      const data = await response.json();
+      console.log('Sending login request:', data);
 
-      if (data.access_token) {
-        await AsyncStorage.setItem('token', data.access_token);
-        const userResponse = await authApis(data.access_token).get(endpoints.usersMe);
-        dispatch({ type: 'login', payload: userResponse });
-        Alert.alert('Thành công', 'Đăng nhập thành công!');
-        navigation.replace(userResponse.role === 'admin' ? 'AdminDashboardScreen' : 'HomeScreen');
+      const response = await nonAuthApis.post(endpoints.login, data);
+
+      console.log('Login response:', response);
+
+      if (response.access_token) {
+        await AsyncStorage.setItem('token', response.access_token);
+        await AsyncStorage.setItem('refresh_token', response.refresh_token);
+        const userResponse = await authApis(response.access_token).get(endpoints.usersMe);
+        await AsyncStorage.setItem('user', JSON.stringify(userResponse));
+        dispatch({ type: 'login', payload: { user: userResponse, token: response.access_token } });
+
+        setMsg('Đăng nhập thành công!');
       } else {
-        // Cải thiện error handling cho login
-        if (data.error === 'invalid_grant') {
-          Alert.alert('Lỗi', 'Sai thông tin đăng nhập. Vui lòng kiểm tra email và mật khẩu.');
-        } else {
-          Alert.alert('Lỗi', data.error_description || 'Đăng nhập thất bại. Vui lòng kiểm tra lại thông tin.');
-        }
+        setMsg('Không nhận được token từ server. Vui lòng thử lại.');
       }
     } catch (error) {
       console.error('Login error:', error.message);
-      // Parse error chi tiết hơn
       try {
         const errorData = JSON.parse(error.message);
         if (errorData.status === 400) {
-          Alert.alert('Lỗi', 'Dữ liệu không hợp lệ. Vui lòng kiểm tra thông tin nhập.');
+          if (errorData.detail?.error === 'unsupported_grant_type') {
+            setMsg('Lỗi cấu hình OAuth2: grant_type không được hỗ trợ.');
+          } else {
+            setMsg('Dữ liệu không hợp lệ. Vui lòng kiểm tra thông tin nhập.');
+          }
         } else if (errorData.status === 401) {
-          Alert.alert('Lỗi', 'Sai thông tin đăng nhập. Vui lòng kiểm tra email và mật khẩu.');
+          setMsg('Sai thông tin đăng nhập. Vui lòng kiểm tra email và mật khẩu.');
         } else if (errorData.status === 403) {
-          Alert.alert('Lỗi', 'Tài khoản của bạn đã bị vô hiệu hóa.');
+          setMsg('Tài khoản của bạn đã bị vô hiệu hóa.');
+        } else if (errorData.status === 404) {
+          setMsg('Không tìm thấy endpoint. Vui lòng kiểm tra cấu hình API.');
         } else {
-          Alert.alert('Lỗi', errorData.detail || 'Đã có lỗi xảy ra. Vui lòng thử lại.');
+          setMsg(errorData.detail || 'Đã có lỗi xảy ra. Vui lòng thử lại.');
         }
       } catch (parseError) {
-        Alert.alert('Lỗi', 'Đã có lỗi xảy ra. Vui lòng thử lại.');
+        setMsg('Lỗi kết nối server. Vui lòng kiểm tra mạng hoặc cấu hình API.');
       }
     } finally {
       setLoading(false);
@@ -69,36 +77,69 @@ const LoginScreen = ({ navigation }) => {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.header}>Đăng nhập</Text>
+      <Title style={styles.header}>Đăng nhập</Title>
       <TextInput
-        style={styles.input}
-        placeholder="Nhập email"
+        label="Email"
         value={email}
         onChangeText={setEmail}
         keyboardType="email-address"
+        style={styles.input}
+        mode="outlined"
+        outlineColor="#007AFF"
+        activeOutlineColor="#005BB5"
       />
       <TextInput
-        style={styles.input}
-        placeholder="Nhập mật khẩu"
+        label="Mật khẩu"
         value={password}
         onChangeText={setPassword}
-        secureTextEntry
-      />
-      {loading ? (
-        <ActivityIndicator size="large" color="#007AFF" />
-      ) : (
-        <>
-          <Button title="Đăng nhập" onPress={handleLogin} color="#007AFF" />
-          <TouchableOpacity onPress={() => navigation.navigate('ForgotPasswordScreen')}>
-            <Text style={styles.forgotPassword}>Quên mật khẩu?</Text>
-          </TouchableOpacity>
-          <Button
-            title="Đăng ký"
-            onPress={() => navigation.navigate('RegisterScreen')}
-            color="#007AFF"
+        secureTextEntry={!showPassword}
+        style={styles.input}
+        mode="outlined"
+        outlineColor="#007AFF"
+        activeOutlineColor="#005BB5"
+        right={
+          <TextInput.Icon
+            icon={showPassword ? 'eye' : 'eye-off'}
+            color="#000"
+            onPress={() => setShowPassword(!showPassword)}
           />
-        </>
+        }
+      />
+      {msg && (
+        <HelperText
+          type={msg.includes('thành công') ? 'info' : 'error'}
+          visible={true}
+          style={styles.msg}
+        >
+          {msg}
+        </HelperText>
       )}
+      <Button
+        mode="contained"
+        onPress={handleLogin}
+        loading={loading}
+        disabled={loading}
+        style={styles.button}
+        buttonColor="#007AFF"
+      >
+        Đăng nhập
+      </Button>
+      <Button
+        mode="text"
+        onPress={() => navigation.navigate('ForgotPasswordScreen')}
+        style={styles.button}
+        textColor="#007AFF"
+      >
+        Quên mật khẩu?
+      </Button>
+      <Button
+        mode="outlined"
+        onPress={() => navigation.navigate('RegisterScreen')}
+        style={styles.button}
+        textColor="#007AFF"
+      >
+        Đăng ký
+      </Button>
     </View>
   );
 };
@@ -106,32 +147,29 @@ const LoginScreen = ({ navigation }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    justifyContent: 'center',
+    padding: 20,
     backgroundColor: '#FFFFFF',
-    padding: 16,
   },
   header: {
+    textAlign: 'center',
+    marginBottom: 20,
     fontSize: 24,
-    fontFamily: 'Roboto',
     fontWeight: '700',
     color: '#007AFF',
-    marginBottom: 16,
   },
   input: {
-    height: 40,
-    borderColor: 'gray',
-    borderWidth: 1,
-    marginBottom: 16,
-    paddingHorizontal: 10,
-    fontFamily: 'Roboto',
-    fontWeight: '400',
+    marginBottom: 15,
+    backgroundColor: '#FFFFFF',
   },
-  forgotPassword: {
-    color: '#007AFF',
+  msg: {
     textAlign: 'center',
-    marginVertical: 10,
+    marginBottom: 15,
     fontSize: 16,
-    fontFamily: 'Roboto',
-    fontWeight: '400',
+  },
+  button: {
+    marginVertical: 10,
+    borderRadius: 8,
   },
 });
 

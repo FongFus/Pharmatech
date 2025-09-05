@@ -386,18 +386,24 @@ class NotificationSerializer(ModelSerializer):
 class ReviewSerializer(ModelSerializer):
     product_name = serializers.SerializerMethodField()
     order_code = serializers.SerializerMethodField()
+    product_id = serializers.PrimaryKeyRelatedField(queryset=Product.objects.filter(is_approved=True), source='product', write_only=True)
 
     class Meta:
         model = Review
-        fields = ['id', 'user', 'product', 'order', 'rating', 'comment', 'created_at', 'updated_at', 'product_name', 'order_code']
+        fields = ['id', 'user', 'product', 'order', 'rating', 'comment', 'created_at', 'updated_at', 'product_name', 'order_code', 'product_id']
         read_only_fields = ['id', 'user', 'created_at', 'updated_at', 'product_name', 'order_code']
 
     def validate(self, data):
         user = self.context['request'].user
         product = data.get('product')
         order = data.get('order')
-        if not order.items.filter(product=product).exists():
-            raise serializers.ValidationError("Người dùng không có đơn hàng chứa sản phẩm này.")
+        if order:
+            if not order.items.filter(product=product).exists():
+                raise serializers.ValidationError("Đơn hàng không chứa sản phẩm này.")
+        else:
+            # Check if user has any order with this product
+            if not Order.objects.filter(user=user, items__product=product).exists():
+                raise serializers.ValidationError("Người dùng chưa mua sản phẩm này.")
         if not 1 <= data.get('rating', 0) <= 5:
             raise serializers.ValidationError("Rating phải trong khoảng 1-5.")
         return data
@@ -444,3 +450,19 @@ class PasswordResetSerializer(serializers.Serializer):
         if len(value) < 8:
             raise serializers.ValidationError("Mật khẩu phải có ít nhất 8 ký tự.")
         return value
+
+# Serializer cho Change Password
+class ChangePasswordSerializer(serializers.Serializer):
+    old_password = serializers.CharField(write_only=True, required=True)
+    new_password = serializers.CharField(write_only=True, required=True)
+
+    def validate_new_password(self, value):
+        if len(value) < 8:
+            raise serializers.ValidationError("Mật khẩu phải có ít nhất 8 ký tự.")
+        return value
+
+    def validate(self, data):
+        user = self.context['request'].user
+        if not user.check_password(data['old_password']):
+            raise serializers.ValidationError("Mật khẩu cũ không đúng.")
+        return data

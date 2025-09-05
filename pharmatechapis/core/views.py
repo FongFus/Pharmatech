@@ -2,6 +2,7 @@ from rest_framework import viewsets, generics, status, filters, permissions
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.filters import SearchFilter, OrderingFilter
+from django_filters import rest_framework as filters
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import Sum, Count, Avg
@@ -17,7 +18,7 @@ from .serializers import (
     UserSerializer, UserDetailSerializer, ProductSerializer, CartSerializer,
     CartItemSerializer, OrderSerializer, OrderItemSerializer, PaymentSerializer,
     DeviceTokenSerializer, AdminProductApprovalSerializer, CategorySerializer, InventorySerializer,
-    PasswordResetSerializer, DiscountSerializer, NotificationSerializer, ReviewSerializer, ReviewReplySerializer
+    PasswordResetSerializer, ChangePasswordSerializer, DiscountSerializer, NotificationSerializer, ReviewSerializer, ReviewReplySerializer
 )
 from .permissions import (
     IsCustomer, IsDistributor, IsAdmin, IsCartOwner, IsOrderOwner, IsProductOwner, IsInventoryManager, IsCategoryManager, IsPaymentManager, IsConversationViewer, IsNotificationOwner, IsReviewOwner, IsAdminOrDistributor
@@ -124,7 +125,7 @@ class UserViewSet(viewsets.ViewSet, generics.CreateAPIView, generics.ListAPIView
     def get_permissions(self):
         if self.action in ['list', 'admin_change_user_active_state', 'destroy']:
             return [IsAdmin()]
-        elif self.action in ['get_current_user', 'deactivate', 'logout', 'fcm_token', 'retrieve', 'partial_update']:
+        elif self.action in ['get_current_user', 'deactivate', 'logout', 'fcm_token', 'retrieve', 'partial_update', 'change-password']:
             return [permissions.IsAuthenticated()]
         elif self.action in ['create', 'password_reset_request', 'password_reset_confirm']:
             return [permissions.AllowAny()]
@@ -256,7 +257,7 @@ class UserViewSet(viewsets.ViewSet, generics.CreateAPIView, generics.ListAPIView
     def password_reset_confirm(self, request):
         code = request.data.get('code')
         new_password = request.data.get('new_password')
-        
+
         if not code or not new_password:
             return Response({'message': 'Code and new password are required.'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -269,13 +270,13 @@ class UserViewSet(viewsets.ViewSet, generics.CreateAPIView, generics.ListAPIView
                 cached_data = data
                 user_id = int(key.replace("password_reset_", ""))
                 break
-        
+
         if not cached_data:
             return Response({'message': 'Invalid or expired reset code.'}, status=status.HTTP_400_BAD_REQUEST)
 
         uidb64 = cached_data['uidb64']
         token = cached_data['token']
-        
+
         try:
             uid = force_str(urlsafe_base64_decode(uidb64))
             user = User.objects.get(pk=uid)
@@ -292,46 +293,52 @@ class UserViewSet(viewsets.ViewSet, generics.CreateAPIView, generics.ListAPIView
 
         user.set_password(serializer.validated_data['new_password'])
         user.save()
-        
+
         # Xóa cache sau khi đặt lại mật khẩu
         cache.delete(f"password_reset_{user.pk}")
-        
+
         return Response({'message': 'Password reset successfully.'}, status=status.HTTP_200_OK)
+
+    @action(methods=['post'], detail=False, url_path='change-password')
+    def change_password(self, request):
+        serializer = ChangePasswordSerializer(data=request.data, context={'request': request})
+        if serializer.is_valid():
+            user = request.user
+            user.set_password(serializer.validated_data['new_password'])
+            user.save()
+            return Response({'message': 'Password changed successfully.'}, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class ProductFilter(filters.FilterSet):
+    price__gte = filters.NumberFilter(field_name='price', lookup_expr='gte')
+    price__lte = filters.NumberFilter(field_name='price', lookup_expr='lte')
+
+    class Meta:
+        model = Product
+        fields = ['category', 'is_approved', 'price', 'price__gte', 'price__lte']
         
 # Product ViewSet
 class ProductViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIView, generics.UpdateAPIView, generics.DestroyAPIView, generics.RetrieveAPIView):
     authentication_classes = [CustomOAuth2Authentication]
-    # queryset = Product.objects.filter(is_approved=True)
     serializer_class = ProductSerializer
     pagination_class = ItemPaginator
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
-    filterset_fields = ['category', 'is_approved', 'price__gte', 'price__lte']
+    filterset_class = ProductFilter  # Sử dụng FilterSet tùy chỉnh
     search_fields = ['name', 'description']
     ordering_fields = ['price', 'created_at']
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_queryset(self):
         user = self.request.user
-
-        # Cho anonymous user: chỉ xem được sản phẩm đã duyệt
         if self.action in ['list', 'retrieve'] and not user.is_authenticated:
             return Product.objects.filter(is_approved=True)
-
-        # My products: cho Distributor thấy toàn bộ sản phẩm của mình, bất kể đã duyệt hay chưa
         if self.action == 'my_products':
             return Product.objects.filter(distributor=user)
-
-        # Approve, update, delete: admin hoặc distributor cần thao tác trên cả sp chưa duyệt
         if self.action in ['approve', 'update', 'partial_update', 'destroy']:
             return Product.objects.all()
-
-        # Review: chỉ sản phẩm chưa duyệt
         if self.action == 'review':
             return Product.objects.filter(is_approved=False)
-
-        # Mặc định: trả về đã duyệt
         return Product.objects.filter(is_approved=True)
-
 
     def get_permissions(self):
         if self.action in ['list', 'retrieve']:
@@ -344,23 +351,12 @@ class ProductViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIV
             return [IsAdmin()]
         return [permissions.IsAuthenticated()]
 
-    # @action(detail=True, methods=['post'], url_path='approve')
-    # def approve(self, request, pk=None):
-    #     product = self.get_object()
-    #     serializer = AdminProductApprovalSerializer(product, data=request.data, context={'request': request})
-    #     serializer.is_valid(raise_exception=True)
-    #     serializer.save()
-    #     if product.is_approved:
-    #         notify_product_approval.delay(product.id)
-    #     return Response({"message": "Trạng thái duyệt sản phẩm đã được cập nhật."})
-
     @action(detail=True, methods=['post'], url_path='approve')
     def approve(self, request, pk=None):
         product = self.get_object()
         product.is_approved = True
         product.save()
-
-        #notify_product_approval.delay(product.id)
+        # notify_product_approval.delay(product.id)
         return Response({"message": "Trạng thái duyệt sản phẩm đã được cập nhật."})
 
     @action(detail=False, methods=['get'], url_path='review')
@@ -601,6 +597,9 @@ class PaymentViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAP
                     payment.status = 'completed'
                     payment.paid_at = timezone.now()
                     payment.save()
+                    # Cập nhật trạng thái đơn hàng
+                    payment.order.status = 'completed'
+                    payment.order.save()
                     send_payment_confirmation_email.delay(
                         user_id=payment.user.id,
                         order_code=payment.order.order_code
@@ -647,6 +646,9 @@ class PaymentViewSet(viewsets.ViewSet, generics.ListAPIView, generics.RetrieveAP
             payment = Payment.objects.get(transaction_id=session_id)
             payment.status = 'failed'
             payment.save()
+            # Cập nhật trạng thái đơn hàng
+            payment.order.status = 'cancelled'
+            payment.order.save()
             return Response({
                 'message': 'Thanh toán đã bị hủy.',
                 'status': payment.status
