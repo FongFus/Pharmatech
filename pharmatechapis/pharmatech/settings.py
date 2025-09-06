@@ -199,7 +199,7 @@ CHANNEL_LAYERS = {
     'default': {
         'BACKEND': 'channels_redis.core.RedisChannelLayer',
         'CONFIG': {
-            'hosts': [tuple(config('CHANNEL_LAYERS_HOSTS', cast=lambda v: v.split(',')))],
+            'hosts': [(config('CHANNEL_LAYERS_HOST'), config('CHANNEL_LAYERS_PORT', cast=int))],
         },
     },
 }

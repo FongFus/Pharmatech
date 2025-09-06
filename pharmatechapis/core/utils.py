@@ -1,14 +1,16 @@
-import pyrebase
-import requests
-from firebase_admin import auth as admin_auth, messaging, credentials, db
-from django.conf import settings
+import aiohttp
+import json
 from django.utils import timezone
 import firebase_admin
+from firebase_admin import auth as admin_auth, messaging, credentials, db
+from asgiref.sync import sync_to_async
+from django.conf import settings
+from django.contrib.auth import get_user_model
 import hashlib
 import stripe
 import hmac
 from urllib.parse import quote_plus
-from django.contrib.auth import get_user_model
+import pyrebase
 
 if not firebase_admin._apps:
     cred = credentials.Certificate(settings.FIREBASE_ADMIN_CREDENTIALS)
@@ -16,12 +18,12 @@ if not firebase_admin._apps:
         'databaseURL': settings.FIREBASE_CONFIG['databaseURL']
     })
 
-# Hàm gọi Gemini API
+# Hàm gọi Gemini API (bất đồng bộ)
 GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent'
 
-def call_gemini_api(message):
-    if len(message) > 1000:  # Giới hạn độ dài tin nhắn
-        raise ValueError("Tin nhắn quá dài, vui lòng gửi tin nhắn ngắn hơn.")
+async def call_gemini_api(message):
+    if len(message) > 1000:
+        raise ValueError("Tin nhắn quá dài, tối đa 1000 ký tự.")
     
     prompt = (
         f"Analyze the following message: '{message}'. "
@@ -29,47 +31,50 @@ def call_gemini_api(message):
         "If it describes a medical issue, offer brief preliminary guidance and advise consulting a doctor. "
         "Keep the response short and clear, suitable for real-time chat."
     )
-    headers = {
-        'Content-Type': 'application/json',
-    }
+    headers = {'Content-Type': 'application/json'}
     data = {
-        'contents': [{
-            'parts': [{'text': prompt}]
-        }],
-        'generationConfig': {
-            'maxOutputTokens': 150,
-            'temperature': 0.7,
-        }
+        'contents': [{'parts': [{'text': prompt}]}],
+        'generationConfig': {'maxOutputTokens': 150, 'temperature': 0.7}
     }
     try:
-        response = requests.post(
-            f'{GEMINI_API_URL}?key={settings.GEMINI_API_KEY}',
-            headers=headers,
-            json=data
-        )
-        response.raise_for_status()
-        result = response.json()
-        return result['candidates'][0]['content']['parts'][0]['text']
-    except requests.exceptions.RequestException as e:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f'{GEMINI_API_URL}?key={settings.GEMINI_API_KEY}',
+                headers=headers,
+                json=data
+            ) as response:
+                response.raise_for_status()
+                result = await response.json()
+                if 'candidates' not in result or not result['candidates']:
+                    raise ValueError("Không nhận được phản hồi hợp lệ từ Gemini API.")
+                return result['candidates'][0]['content']['parts'][0]['text']
+    except aiohttp.ClientError as e:
         raise Exception(f"Lỗi khi gọi Gemini API: {str(e)}")
+    except KeyError as e:
+        raise Exception(f"Định dạng phản hồi Gemini API không đúng: {str(e)}")
 
-# Các hàm Firebase hiện có
-def create_firebase_user(email, password, user_id, role):
+# Các hàm Firebase
+async def create_firebase_user(email, password, user_id, role):
     try:
         firebase = pyrebase.initialize_app(settings.FIREBASE_CONFIG)
         auth = firebase.auth()
-        user = auth.create_user_with_email_and_password(email, password)
-        admin_auth.set_custom_user_claims(user['localId'], {'role': role})
+        # Bọc synchronous Firebase call trong sync_to_async
+        user = await sync_to_async(auth.create_user_with_email_and_password)(email, password)
+        await sync_to_async(admin_auth.set_custom_user_claims)(user['localId'], {'role': role})
         return {'success': True, 'user': user}
     except Exception as e:
         return {'success': False, 'message': f"Lỗi khi tạo người dùng Firebase: {str(e)}"}
 
-def create_django_and_firebase_user(username, email, password, role, **extra_fields):
+async def create_django_and_firebase_user(username, email, password, role, **extra_fields):
     User = get_user_model()
-    user = User.objects.create_user(username=username, email=email, password=password, role=role, **extra_fields)
-    firebase_result = create_firebase_user(email, password, user.id, role)
+    # Bọc synchronous Django ORM call
+    user = await sync_to_async(User.objects.create_user)(
+        username=username, email=email, password=password, role=role, **extra_fields
+    )
+    firebase_result = await create_firebase_user(email, password, user.id, role)
     if not firebase_result['success']:
-        user.delete()
+        # Bọc synchronous delete
+        await sync_to_async(user.delete)()
         raise Exception(firebase_result['message'])
     return user
 
@@ -88,27 +93,38 @@ def save_message_to_firebase(user_id, conversation_id, message, response):
     except Exception as e:
         return {'success': False, 'message': f"Lỗi khi lưu tin nhắn vào Firebase: {str(e)}"}
 
-def send_fcm_v1(user, title, body, data=None):
+async def send_fcm_v1(user, title, body, data=None):
     try:
-        tokens = DeviceToken.objects.filter(user=user)
-        if not tokens.exists():
+        # Bọc synchronous Django ORM query
+        tokens = await sync_to_async(lambda: list(DeviceToken.objects.filter(user=user)))()
+        if not tokens:
             return {'success': False, 'message': 'Không tìm thấy token thiết bị.'}
+        invalid_tokens = []
         for token in tokens:
-            message = messaging.Message(
-                notification=messaging.Notification(
-                    title=title,
-                    body=body,
-                ),
-                token=token.token,
-                data=data
-            )
-            messaging.send(message)
+            try:
+                message = messaging.Message(
+                    notification=messaging.Notification(
+                        title=title,
+                        body=body,
+                    ),
+                    token=token.token,
+                    data=data
+                )
+                # Bọc synchronous Firebase messaging call
+                await sync_to_async(messaging.send)(message)
+            except messaging.FirebaseError as e:
+                if 'not-registered' in str(e):
+                    invalid_tokens.append(token.token)
+        # Xóa token không hợp lệ
+        if invalid_tokens:
+            await sync_to_async(DeviceToken.objects.filter(token__in=invalid_tokens).delete)()
         return {'success': True, 'message': 'Thông báo đã được gửi.'}
     except Exception as e:
         return {'success': False, 'message': f"Lỗi khi gửi FCM: {str(e)}"}
 
 # Khởi tạo Stripe
 stripe.api_key = settings.STRIPE_SECRET_KEY
+
 def create_stripe_checkout_session(order, user):
     """Tạo Stripe Checkout Session."""
     try:
@@ -117,11 +133,11 @@ def create_stripe_checkout_session(order, user):
             line_items=[
                 {
                     'price_data': {
-                        'currency': 'vnd',  # Sử dụng VND
+                        'currency': 'vnd',
                         'product_data': {
                             'name': f"Đơn hàng {order.order_code}",
                         },
-                        'unit_amount': int(order.total_amount),  # Số tiền VND trực tiếp
+                        'unit_amount': int(order.total_amount),
                     },
                     'quantity': 1,
                 },
@@ -148,7 +164,7 @@ def process_stripe_refund(payment):
     try:
         refund = stripe.Refund.create(
             payment_intent=payment.transaction_id,
-            amount=int(float(payment.amount) * 100),  # Chuyển sang cent
+            amount=int(float(payment.amount) * 100),
             reason='requested_by_customer',
         )
         return {'success': True, 'refund_id': refund.id}
@@ -157,8 +173,7 @@ def process_stripe_refund(payment):
 
 def generate_reset_code(uidb64, token):
     """Tạo mã code 6 ký tự từ uidb64 và token."""
-    import hashlib
     combined = f"{uidb64}{token}".encode('utf-8')
     hash_object = hashlib.sha256(combined)
-    code = hash_object.hexdigest()[:6].upper()  # Lấy 6 ký tự đầu, chuyển thành chữ hoa
+    code = hash_object.hexdigest()[:6].upper()
     return code

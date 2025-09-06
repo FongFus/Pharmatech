@@ -1,14 +1,18 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { 
-  View, Text, TextInput, FlatList, Image, StyleSheet, 
-  TouchableOpacity, ActivityIndicator, Alert, RefreshControl, ScrollView
+import {
+  View, Text, TextInput, FlatList, Image, StyleSheet,
+  TouchableOpacity, ActivityIndicator, Alert, RefreshControl, ScrollView,
+  TouchableNativeFeedback, Platform, StatusBar
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import Modal from 'react-native-modal';
 import MultiSlider from '@ptomasroos/react-native-multi-slider';
 import { useNavigation } from '@react-navigation/native';
 import { endpoints, authApis, nonAuthApis } from '../../configs/Apis';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MyDispatchContext } from '../../configs/MyContexts';
+import * as NavigationBar from 'expo-navigation-bar';
 
 const HomeScreen = () => {
   const navigation = useNavigation();
@@ -100,6 +104,16 @@ const HomeScreen = () => {
     loadData();
   }, [dispatch, navigation]);
 
+  useEffect(() => {
+    const setNavigationBarColor = async () => {
+      if (Platform.OS === 'android') {
+        await NavigationBar.setBackgroundColorAsync('#007AFF');
+        await NavigationBar.setButtonStyleAsync('light');
+      }
+    };
+    setNavigationBarColor();
+  }, []);
+
   const onRefresh = () => {
     setRefreshing(true);
     const refreshData = async () => {
@@ -159,34 +173,73 @@ const HomeScreen = () => {
         <Text style={styles.cardTitle}>{item.name}</Text>
         <Text style={styles.cardPrice}>{Number(item.price).toLocaleString()} ₫</Text>
         <View style={styles.cardButtons}>
-          <TouchableOpacity style={styles.detailBtn} onPress={() => navigation.navigate('ProductDetailScreen', { productId: item.id })}>
-            <Text style={styles.btnText}>Xem chi tiết</Text>
-          </TouchableOpacity>
-          <TouchableOpacity 
-            style={[styles.cartBtn, { opacity: AsyncStorage.getItem('token') ? 1 : 0.5 }]} 
-            onPress={() => {
-              if (!AsyncStorage.getItem('token')) {
-                Alert.alert("Yêu cầu đăng nhập", "Vui lòng đăng nhập để thêm sản phẩm vào giỏ hàng.");
-                navigation.navigate("LoginScreen");
-              } else {
-                navigation.navigate('CartScreen', { productId: item.id });
-              }
-            }}
-            disabled={!AsyncStorage.getItem('token')}
-          >
-            <Text style={styles.btnText}>Thêm vào giỏ</Text>
-          </TouchableOpacity>
+          {Platform.select({
+            android: (
+              <TouchableNativeFeedback onPress={() => navigation.navigate('ProductDetailScreen', { productId: item.id })} background={TouchableNativeFeedback.Ripple('#fff', false)}>
+                <View style={styles.detailBtn}>
+                  <Text style={styles.btnText}>Xem chi tiết</Text>
+                </View>
+              </TouchableNativeFeedback>
+            ),
+            ios: (
+              <TouchableOpacity style={styles.detailBtn} onPress={() => navigation.navigate('ProductDetailScreen', { productId: item.id })}>
+                <Text style={styles.btnText}>Xem chi tiết</Text>
+              </TouchableOpacity>
+            )
+          })}
+          {Platform.select({
+            android: (
+              <TouchableNativeFeedback
+                onPress={() => {
+                  if (!AsyncStorage.getItem('token')) {
+                    Alert.alert("Yêu cầu đăng nhập", "Vui lòng đăng nhập để thêm sản phẩm vào giỏ hàng.");
+                    navigation.navigate("LoginScreen");
+                  } else {
+                    navigation.navigate('CartScreen', { productId: item.id });
+                  }
+                }}
+                background={TouchableNativeFeedback.Ripple('#fff', false)}
+                disabled={!AsyncStorage.getItem('token')}
+              >
+                <View style={[styles.cartBtn, { opacity: AsyncStorage.getItem('token') ? 1 : 0.5 }]}>
+                  <Text style={styles.btnText}>Thêm vào giỏ</Text>
+                </View>
+              </TouchableNativeFeedback>
+            ),
+            ios: (
+              <TouchableOpacity
+                style={[styles.cartBtn, { opacity: AsyncStorage.getItem('token') ? 1 : 0.5 }]}
+                onPress={() => {
+                  if (!AsyncStorage.getItem('token')) {
+                    Alert.alert("Yêu cầu đăng nhập", "Vui lòng đăng nhập để thêm sản phẩm vào giỏ hàng.");
+                    navigation.navigate("LoginScreen");
+                  } else {
+                    navigation.navigate('CartScreen', { productId: item.id });
+                  }
+                }}
+                disabled={!AsyncStorage.getItem('token')}
+              >
+                <Text style={styles.btnText}>Thêm vào giỏ</Text>
+              </TouchableOpacity>
+            )
+          })}
         </View>
       </View>
     </View>
   );
 
   if (loading) {
-    return <ActivityIndicator size="large" color="#007AFF" style={{ flex:1, justifyContent:'center', alignItems:'center' }} />;
+    return (
+      <SafeAreaView style={{ flex:1, justifyContent:'center', alignItems:'center' }}>
+        <StatusBar barStyle="light-content" backgroundColor="#007AFF" />
+        <ActivityIndicator size="large" color="#007AFF" />
+      </SafeAreaView>
+    );
   }
 
   return (
-    <View style={{ flex:1 }}>
+    <SafeAreaView style={{ flex:1 }}>
+      <StatusBar barStyle="light-content" backgroundColor="#007AFF" />
       {/* Search + Filter Button */}
       <View style={styles.searchFilterContainer}>
         <TextInput
@@ -195,12 +248,34 @@ const HomeScreen = () => {
           value={searchText}
           onChangeText={setSearchText}
         />
-        <TouchableOpacity style={styles.filterBtn} onPress={openFilterModal}>
-          <Text style={styles.btnText}>Bộ lọc</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.searchBtn} onPress={handleSearch}>
-          <Text style={styles.btnText}>Tìm kiếm</Text>
-        </TouchableOpacity>
+        {Platform.select({
+          android: (
+            <TouchableNativeFeedback onPress={openFilterModal} background={TouchableNativeFeedback.Ripple('#fff', false)}>
+              <View style={styles.filterBtn}>
+                <Text style={styles.btnText}>Bộ lọc</Text>
+              </View>
+            </TouchableNativeFeedback>
+          ),
+          ios: (
+            <TouchableOpacity style={styles.filterBtn} onPress={openFilterModal}>
+              <Text style={styles.btnText}>Bộ lọc</Text>
+            </TouchableOpacity>
+          )
+        })}
+        {Platform.select({
+          android: (
+            <TouchableNativeFeedback onPress={handleSearch} background={TouchableNativeFeedback.Ripple('#fff', false)}>
+              <View style={styles.searchBtn}>
+                <Text style={styles.btnText}>Tìm kiếm</Text>
+              </View>
+            </TouchableNativeFeedback>
+          ),
+          ios: (
+            <TouchableOpacity style={styles.searchBtn} onPress={handleSearch}>
+              <Text style={styles.btnText}>Tìm kiếm</Text>
+            </TouchableOpacity>
+          )
+        })}
       </View>
 
       <FlatList
@@ -214,41 +289,43 @@ const HomeScreen = () => {
 
       {/* Filter Modal */}
       <Modal isVisible={isFilterModalVisible} onBackdropPress={() => setFilterModalVisible(false)}>
-        <View style={styles.modalContainer}>
-          <Text style={styles.modalTitle}>Bộ lọc sản phẩm</Text>
+        <KeyboardAwareScrollView>
+          <View style={styles.modalContainer}>
+            <Text style={styles.modalTitle}>Bộ lọc sản phẩm</Text>
 
-          {/* Slider giá */}
-          <Text style={styles.filterLabel}>Giá: {tempPriceRange[0].toLocaleString()} - {tempPriceRange[1].toLocaleString()} VND</Text>
-          <MultiSlider
-            values={[tempPriceRange[0], tempPriceRange[1]]}
-            min={0}
-            max={2000000}
-            step={10000}
-            onValuesChange={values => setTempPriceRange(values)}
-            selectedStyle={{ backgroundColor:'#007AFF' }}
-            markerStyle={{ backgroundColor:'#007AFF' }}
-          />
+            {/* Slider giá */}
+            <Text style={styles.filterLabel}>Giá: {tempPriceRange[0].toLocaleString()} - {tempPriceRange[1].toLocaleString()} VND</Text>
+            <MultiSlider
+              values={[tempPriceRange[0], tempPriceRange[1]]}
+              min={0}
+              max={2000000}
+              step={10000}
+              onValuesChange={values => setTempPriceRange(values)}
+              selectedStyle={{ backgroundColor:'#007AFF' }}
+              markerStyle={{ backgroundColor:'#007AFF' }}
+            />
 
-          {/* Danh mục */}
-          <Text style={[styles.filterLabel,{marginTop:16}]}>Danh mục</Text>
-          <ScrollView style={{ maxHeight:150 }}>
-            {categories.map(cat => (
-              <TouchableOpacity 
-                key={cat.id} 
-                style={styles.categoryItem} 
-                onPress={() => setTempCategory(tempCategory===cat.id.toString()?'':cat.id.toString())}
-              >
-                <Text style={{ color: tempCategory===cat.id.toString()?'#007AFF':'#333' }}>{cat.name}</Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
+            {/* Danh mục */}
+            <Text style={[styles.filterLabel,{marginTop:16}]}>Danh mục</Text>
+            <ScrollView style={{ maxHeight:150 }}>
+              {categories.map(cat => (
+                <TouchableOpacity
+                  key={cat.id}
+                  style={styles.categoryItem}
+                  onPress={() => setTempCategory(tempCategory===cat.id.toString()?'':cat.id.toString())}
+                >
+                  <Text style={{ color: tempCategory===cat.id.toString()?'#007AFF':'#333' }}>{cat.name}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
 
-          <TouchableOpacity style={styles.applyFilterBtn} onPress={handleApplyFilter}>
-            <Text style={styles.btnText}>Hoàn tất</Text>
-          </TouchableOpacity>
-        </View>
+            <TouchableOpacity style={styles.applyFilterBtn} onPress={handleApplyFilter}>
+              <Text style={styles.btnText}>Hoàn tất</Text>
+            </TouchableOpacity>
+          </View>
+        </KeyboardAwareScrollView>
       </Modal>
-    </View>
+    </SafeAreaView>
   );
 };
 
