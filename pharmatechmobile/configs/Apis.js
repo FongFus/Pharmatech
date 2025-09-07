@@ -323,4 +323,11 @@ const nonAuthApis = {
   },
 };
 
-export { endpoints, authApis, nonAuthApis, CLIENT_ID, CLIENT_SECRET };
+export { endpoints, authApis, nonAuthApis, CLIENT_ID, CLIENT_SECRET, BASE_URL };
+
+// Hàm tạo URL WebSocket dựa trên BASE_URL
+export const getWebSocketURL = (conversationId) => {
+  const protocol = BASE_URL.startsWith('https://') ? 'wss://' : 'ws://';
+  const base = BASE_URL.replace(/^https?:\/\//, '');
+  return `${protocol}${base}ws/chat/${conversationId || 'new'}/`;
+};

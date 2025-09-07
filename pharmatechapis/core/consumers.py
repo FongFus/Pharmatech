@@ -1,7 +1,7 @@
 import json
 import uuid
 from channels.generic.websocket import AsyncWebsocketConsumer
-from .utils import call_gemini_api, save_message_to_firebase, send_fcm_v1
+from .utils import call_gemini_api, save_message_to_firebase, send_fcm_v1, get_messages_from_firebase, extract_main_guidance
 from oauth2_provider.models import AccessToken
 from asgiref.sync import sync_to_async
 from firebase_admin import exceptions as firebase_exceptions
@@ -10,11 +10,21 @@ from aiohttp import ClientError as AiohttpClientError
 class ChatConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         # Lấy conversation_id từ URL hoặc tạo mới nếu không có
-        conversation_id = self.scope['url_route']['kwargs'].get('conversation_id')
-        if not conversation_id or conversation_id == 'new':
-            conversation_id = str(uuid.uuid4())
+        original_conversation_id = self.scope['url_route']['kwargs'].get('conversation_id')
+        if not original_conversation_id or original_conversation_id == 'new':
+            self.conversation_id = str(uuid.uuid4())
+            self.is_new_conversation = True
+        else:
+            # Xác thực conversation_id là UUID hợp lệ
+            try:
+                uuid.UUID(original_conversation_id)
+                self.conversation_id = original_conversation_id
+                self.is_new_conversation = False
+            except ValueError:
+                await self.send(text_data=json.dumps({'error': 'conversation_id không hợp lệ.'}))
+                await self.close(code=4002)
+                return
         
-        self.conversation_id = conversation_id
         self.user = self.scope['user']
         
         if not self.user.is_authenticated:
@@ -37,6 +47,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             'conversation_id': self.conversation_id,
                             'message': 'Kết nối thành công, hội thoại mới đã được tạo.'
                         }))
+                        if not self.is_new_conversation:
+                            await self.send_previous_messages()
                     else:
                         await self.send(text_data=json.dumps({'error': 'Token không hợp lệ hoặc đã hết hạn.'}))
                         await self.close(code=4001)
@@ -53,6 +65,17 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'conversation_id': self.conversation_id,
                 'message': 'Kết nối thành công.'
             }))
+            if not self.is_new_conversation:
+                await self.send_previous_messages()
+
+    async def send_previous_messages(self):
+        try:
+            messages = await sync_to_async(get_messages_from_firebase)(self.conversation_id, self.user.id)
+            await self.send(text_data=json.dumps({
+                'previous_messages': messages
+            }))
+        except Exception as e:
+            await self.send(text_data=json.dumps({'error': f"Lỗi khi tải lịch sử tin nhắn: {str(e)}"}))
 
     async def disconnect(self, close_code):
         pass
@@ -65,8 +88,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
             return
 
         try:
-            response_text = await call_gemini_api(message)  # Bây giờ là async
-            result = save_message_to_firebase(str(self.user.id), self.conversation_id, message, response_text)
+            response_text = await call_gemini_api(message, self.conversation_id, self.user.id)  # Bây giờ là async với context
+
+            # Trích xuất phần hướng dẫn chính từ phản hồi
+            main_guidance = extract_main_guidance(response_text)
+
+            result = save_message_to_firebase(str(self.user.id), self.conversation_id, message, main_guidance)
             if not result['success']:
                 await self.send(text_data=json.dumps({'error': result['message']}))
                 return
@@ -74,9 +101,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await self.send(text_data=json.dumps({
                 'conversation_id': self.conversation_id,
                 'message': message,
-                'response': response_text
+                'response': main_guidance
             }))
-            await send_fcm_v1(self.user, "Phản hồi chatbot", response_text)  # Bây giờ là async
+            await send_fcm_v1(self.user, "Phản hồi chatbot", main_guidance)  # Bây giờ là async
         except AiohttpClientError as e:
             await self.send(text_data=json.dumps({'error': f"Lỗi kết nối Gemini API: {str(e)}"}))
         except firebase_exceptions.FirebaseError as e:

@@ -21,16 +21,33 @@ if not firebase_admin._apps:
 # Hàm gọi Gemini API (bất đồng bộ)
 GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent'
 
-async def call_gemini_api(message):
+async def call_gemini_api(message, conversation_id=None, user_id=None):
     if len(message) > 1000:
         raise ValueError("Tin nhắn quá dài, tối đa 1000 ký tự.")
-    
+
+    # Lấy 2 cặp hỏi đáp trước đó từ Firebase
+    previous_messages = []
+    if conversation_id and user_id:
+        try:
+            messages = await sync_to_async(get_messages_from_firebase)(conversation_id, user_id, limit=4)
+            # Lấy 2 cặp hỏi đáp (4 tin nhắn: user-response-user-response)
+            if len(messages) >= 4:
+                previous_messages = messages[-4:]
+        except Exception:
+            previous_messages = []
+
+    # Tạo phần lịch sử hội thoại cho prompt
+    conversation_history = ""
+    for msg in previous_messages:
+        role = "Người dùng" if msg['message_type'] == 'user' else "Trợ lý"
+        conversation_history += f"{role}: {msg['message'] if role == 'Người dùng' else msg['response']}\n"
+
     prompt = (
-        f"Analyze the following message: '{message}'. "
-        "If it contains medical terminology, provide a concise explanation in Vietnamese. "
-        "If it describes a medical issue, offer brief preliminary guidance and advise consulting a doctor. "
-        "Keep the response short and clear, suitable for real-time chat."
+        f"Bạn là một trợ lý y tế thông minh, trả lời bằng tiếng Việt, cung cấp giải thích thuật ngữ y tế và hướng dẫn sơ bộ. "
+        f"Không chẩn đoán bệnh. Phản hồi phải liên kết với bối cảnh hội thoại trước đó:\n{conversation_history}"
+        f"Người dùng: {message}\n"
     )
+
     headers = {'Content-Type': 'application/json'}
     data = {
         'contents': [{'parts': [{'text': prompt}]}],
@@ -177,3 +194,73 @@ def generate_reset_code(uidb64, token):
     hash_object = hashlib.sha256(combined)
     code = hash_object.hexdigest()[:6].upper()
     return code
+
+def extract_main_guidance(response_text):
+    """
+    Trích xuất phần hướng dẫn chính từ phản hồi của Gemini API hoặc Firebase.
+    Loại bỏ phân tích, giải thích thuật ngữ, và dịch tiếng Anh.
+    Giới hạn tối đa 3 câu.
+    Nếu phản hồi bị cắt giữa chừng, trả về thông báo mặc định.
+    """
+    if not response_text:
+        return "Vui lòng cung cấp thêm thông tin để được hỗ trợ tốt hơn."
+
+    # Danh sách từ khóa để tìm phần hướng dẫn
+    keywords = ["**Trả lời:**", "Response (Vietnamese):", "Lời khuyên sơ bộ:"]
+
+    for kw in keywords:
+        if kw in response_text:
+            parts = response_text.split(kw, 1)
+            if len(parts) > 1:
+                guidance = parts[1].strip()
+                # Loại bỏ dấu ngoặc kép nếu có
+                if guidance.startswith('"') and guidance.endswith('"'):
+                    guidance = guidance[1:-1]
+                # Giới hạn tối đa 3 câu
+                sentences = guidance.split('.')
+                if len(sentences) > 3:
+                    guidance = '.'.join(sentences[:3]) + '.'
+                return guidance
+
+    # Nếu không tìm thấy từ khóa, lấy toàn bộ phản hồi và giới hạn 3 câu
+    sentences = response_text.split('.')
+    if len(sentences) > 3:
+        guidance = '.'.join(sentences[:3]) + '.'
+    else:
+        guidance = response_text
+
+    # Kiểm tra nếu phản hồi bị cắt giữa chừng (không kết thúc bằng dấu chấm)
+    if not guidance.endswith('.'):
+        return "Vui lòng cung cấp thêm thông tin để được hỗ trợ tốt hơn."
+
+    return guidance
+
+def get_messages_from_firebase(conversation_id, user_id, limit=50):
+    """
+    Lấy tin nhắn từ Firebase cho conversation_id và user_id cụ thể.
+    Trích xuất phần hướng dẫn chính từ response.
+    Sắp xếp theo timestamp.
+    Giới hạn số lượng tin nhắn (mặc định 50).
+    """
+    try:
+        ref = db.reference(f'chat_messages/{conversation_id}')
+        messages_data = ref.get()
+        if not messages_data:
+            return []
+
+        messages = []
+        for key, msg in messages_data.items():
+            if msg.get('user_id') == str(user_id):
+                cleaned_response = extract_main_guidance(msg.get('response', ''))
+                messages.append({
+                    'message': msg.get('message', ''),
+                    'response': cleaned_response,
+                    'timestamp': msg.get('timestamp', ''),
+                    'message_type': msg.get('message_type', 'user')
+                })
+
+        # Sắp xếp theo timestamp và giới hạn số lượng
+        messages.sort(key=lambda x: x['timestamp'])
+        return messages[-limit:]  # Lấy 50 tin nhắn gần nhất
+    except Exception as e:
+        raise Exception(f"Lỗi khi lấy tin nhắn từ Firebase: {str(e)}")
