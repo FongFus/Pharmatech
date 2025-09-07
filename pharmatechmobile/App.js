@@ -54,13 +54,19 @@ const CustomerStackNavigator = () => (
     <Stack.Screen name="HomeScreen" component={HomeScreen} />
     <Stack.Screen name="ProductDetailScreen" component={ProductDetailScreen} />
     <Stack.Screen name="CartScreen" component={CartScreen} />
-    <Stack.Screen name="OrderScreen" component={OrderScreen} />
-    <Stack.Screen name="OrderDetailScreen" component={OrderDetailScreen} />
     <Stack.Screen name="PaymentScreen" component={PaymentScreen} />
     <Stack.Screen name="ReviewScreen" component={ReviewScreen} />
     <Stack.Screen name="ChatScreen" component={ChatScreen} />
     <Stack.Screen name="ProfileScreen" component={ProfileScreen} />
     <Stack.Screen name="NotificationScreen" component={NotificationScreen} />
+  </Stack.Navigator>
+);
+
+// Stack Navigator cho Orders
+const OrderStackNavigator = () => (
+  <Stack.Navigator screenOptions={{ headerShown: false }}>
+    <Stack.Screen name="OrderScreen" component={OrderScreen} />
+    <Stack.Screen name="OrderDetailScreen" component={OrderDetailScreen} />
   </Stack.Navigator>
 );
 
@@ -100,7 +106,7 @@ const CustomerTabs = () => (
   <Tab.Navigator screenOptions={{ headerShown: false }}>
     {createTabScreen("home", CustomerStackNavigator, "Home", "home")}
     {createTabScreen("cart", CartScreen, "Cart", "cart")}
-    {createTabScreen("orders", OrderScreen, "Orders", "clipboard-list")}
+    {createTabScreen("orders", OrderStackNavigator, "Orders", "clipboard-list")}
     {createTabScreen("chat", ChatScreen, "Chat", "chat")}
     {createTabScreen("profile", ProfileScreen, "Profile", "account")}
   </Tab.Navigator>

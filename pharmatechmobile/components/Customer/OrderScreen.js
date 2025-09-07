@@ -1,5 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, FlatList, Button, StyleSheet, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, FlatList, StyleSheet, ActivityIndicator, Alert, RefreshControl, Platform, StatusBar, TouchableNativeFeedback, TouchableOpacity } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
+import { Button } from 'react-native-paper';
 import { useNavigation } from '@react-navigation/native';
 import { endpoints, authApis } from '../../configs/Apis';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -7,18 +10,38 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const OrderScreen = () => {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const [nextPage, setNextPage] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
   const navigation = useNavigation();
 
-  const fetchOrders = async () => {
+  const fetchOrders = async (pageNum = 1, isRefresh = false) => {
     const token = await AsyncStorage.getItem('token');
     const authApi = authApis(token);
     try {
-      const response = await authApi.get(endpoints.ordersList);
-      setOrders(response.data);
+      const response = await authApi.get(endpoints.ordersList + '?page=' + pageNum);
+      if (response && response.results) {
+        if (isRefresh) {
+          setOrders(response.results);
+        } else {
+          setOrders(prev => pageNum === 1 ? response.results : [...prev, ...response.results]);
+        }
+        setNextPage(response.next);
+        setPage(pageNum);
+      } else {
+        Alert.alert('Lỗi', 'Dữ liệu không hợp lệ từ server');
+      }
     } catch (error) {
-      Alert.alert('Lỗi', 'Không thể tải đơn hàng');
+      try {
+        const errorData = JSON.parse(error.message);
+        const detail = errorData.detail || 'Không thể tải đơn hàng';
+        Alert.alert('Lỗi', detail);
+      } catch {
+        Alert.alert('Lỗi', 'Không thể tải đơn hàng');
+      }
     } finally {
       setLoading(false);
+      if (isRefresh) setRefreshing(false);
     }
   };
 
@@ -26,50 +49,71 @@ const OrderScreen = () => {
     fetchOrders();
   }, []);
 
-  const handleCancelOrder = async (orderId) => {
-    const token = await AsyncStorage.getItem('token');
-    const authApi = authApis(token);
-    try {
-      await authApi.post(endpoints.ordersCancel(orderId));
-      Alert.alert('Thành công', 'Đã hủy đơn hàng');
-      fetchOrders(); // Refetch to ensure sync with backend
-    } catch (error) {
-      Alert.alert('Lỗi', 'Hủy đơn hàng thất bại');
+  const loadMore = () => {
+    if (nextPage && !loading) {
+      fetchOrders(page + 1);
     }
   };
 
-  const renderItem = ({ item }) => (
-    <View style={styles.item}>
-      <Text style={styles.title}>Mã đơn: {item.id}</Text>
-      <Text style={styles.total}>Tổng: {item.total} VND</Text>
-      <Text style={[styles.status, { color: item.status === 'completed' ? 'green' : item.status === 'cancelled' ? 'red' : '#007AFF' }]}>
-        Trạng thái: {item.status}
-      </Text>
-      <Button
-        title="Xem chi tiết"
-        onPress={() => navigation.navigate('OrderDetailScreen', { orderId: item.id })}
-        color="#007AFF"
-      />
-      {item.status === 'pending' && (
-        <Button title="Hủy đơn" onPress={() => handleCancelOrder(item.id)} color="#FF0000" />
-      )}
-    </View>
-  );
+  const onRefresh = () => {
+    setRefreshing(true);
+    setPage(1);
+    setNextPage(null);
+    fetchOrders(1, true);
+  };
 
-  if (loading) {
+  const renderItem = ({ item }) => {
+    const ButtonWrapper = Platform.select({
+      android: TouchableNativeFeedback,
+      ios: TouchableOpacity,
+    });
+    return (
+      <View style={styles.item}>
+        <Text style={styles.title}>Mã đơn: {item.order_code}</Text>
+        <Text style={styles.total}>Tổng: {item.total_amount} VND</Text>
+        <Text style={[styles.status, { color: item.status === 'completed' ? 'green' : item.status === 'cancelled' ? 'red' : '#007AFF' }]}>
+          Trạng thái: {item.status}
+        </Text>
+        <ButtonWrapper>
+          <Button
+            mode="contained"
+            onPress={() => navigation.navigate('OrderDetailScreen', { orderId: item.id })}
+            style={styles.button}
+            labelStyle={styles.buttonLabel}
+          >
+            Xem chi tiết
+          </Button>
+        </ButtonWrapper>
+      </View>
+    );
+  };
+
+  if (loading && page === 1) {
     return <ActivityIndicator size="large" color="#007AFF" />;
   }
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container}>
+      <StatusBar backgroundColor="#FFFFFF" barStyle="dark-content" />
       <Text style={styles.header}>Đơn hàng</Text>
-      <FlatList
-        data={orders}
-        renderItem={renderItem}
-        keyExtractor={item => item.id.toString()}
-        ListEmptyComponent={<Text style={styles.warning}>Không có đơn hàng</Text>}
-      />
-    </View>
+      <KeyboardAwareScrollView contentContainerStyle={styles.scrollContainer}>
+        <FlatList
+          data={orders}
+          renderItem={renderItem}
+          keyExtractor={item => item.id.toString()}
+          onEndReached={loadMore}
+          onEndReachedThreshold={0.5}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          }
+          ListEmptyComponent={<Text style={styles.warning}>Không có đơn hàng</Text>}
+          getItemLayout={(data, index) => ({ length: 100, offset: 100 * index, index })}
+          initialNumToRender={10}
+          maxToRenderPerBatch={5}
+          scrollEnabled={false}
+        />
+      </KeyboardAwareScrollView>
+    </SafeAreaView>
   );
 };
 
@@ -77,7 +121,13 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#FFFFFF',
-    padding: 12,
+    ...Platform.select({
+      ios: { paddingTop: 20 },
+      android: { paddingTop: 10 },
+    }),
+  },
+  scrollContainer: {
+    flexGrow: 1,
   },
   header: {
     fontSize: 24,
@@ -85,6 +135,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#007AFF',
     marginBottom: 12,
+    paddingHorizontal: 12,
   },
   item: {
     padding: 12,
@@ -107,6 +158,15 @@ const styles = StyleSheet.create({
     fontFamily: 'Roboto-Italic',
     fontWeight: '400',
     marginVertical: 8,
+  },
+  button: {
+    marginTop: 8,
+    backgroundColor: '#007AFF',
+  },
+  buttonLabel: {
+    color: '#FFFFFF',
+    fontFamily: 'Roboto',
+    fontWeight: '400',
   },
   warning: {
     fontSize: 16,
