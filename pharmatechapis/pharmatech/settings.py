@@ -3,6 +3,7 @@ import os
 import pymysql
 import cloudinary
 from decouple import config
+from celery.schedules import crontab
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -34,6 +35,7 @@ INSTALLED_APPS = [
     'cloudinary_storage',
     'cloudinary',
     'channels',
+    'django_celery_beat',
 ]
 
 MIDDLEWARE = [
@@ -321,5 +323,17 @@ LOGGING = {
             'level': 'DEBUG',
             'propagate': False,
         },
+    },
+}
+
+CELERY_BEAT_SCHEDULE = {
+    'scrape-healthcare-data': {
+        'task': 'core.tasks.scrape_and_store_websites',
+        'schedule': crontab(hour=0, minute=0),  # Chạy hàng ngày lúc nửa đêm
+        'args': ([
+            'https://www.who.int/news-room/fact-sheets',
+            'https://www.cdc.gov/health-topics.html',
+            # Thêm các URL khác
+        ],),
     },
 }

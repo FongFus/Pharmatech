@@ -70,10 +70,16 @@ const OrderStackNavigator = () => (
   </Stack.Navigator>
 );
 
+// Stack Navigator cho Products
+const ProductsStackNavigator = () => (
+  <Stack.Navigator screenOptions={{ headerShown: false }}>
+    <Stack.Screen name="EditProductScreen" component={EditProductScreen} />
+  </Stack.Navigator>
+);
+
 // Stack Navigator cho Distributor
 const DistributorStackNavigator = () => (
   <Stack.Navigator screenOptions={{ headerShown: false }}>
-    <Stack.Screen name="EditProductScreen" component={EditProductScreen} />
     <Stack.Screen name="InventoryManagementScreen" component={InventoryManagementScreen} />
     <Stack.Screen name="ProfileScreen" component={ProfileScreen} />
     <Stack.Screen name="NotificationScreen" component={NotificationScreen} />
@@ -115,7 +121,7 @@ const CustomerTabs = () => (
 // Tabs cho Distributor
 const DistributorTabs = () => (
   <Tab.Navigator screenOptions={{ headerShown: false }}>
-    {createTabScreen("products", EditProductScreen, "Products", "package-variant")}
+    {createTabScreen("products", ProductsStackNavigator, "Products", "package-variant")}
     {createTabScreen("inventory", InventoryManagementScreen, "Inventory", "warehouse")}
     {createTabScreen("profile", ProfileScreen, "Profile", "account")}
     {createTabScreen("notifications", NotificationScreen, "Notifications", "bell")}

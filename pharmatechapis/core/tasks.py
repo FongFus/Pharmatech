@@ -4,6 +4,12 @@ from .models import User, Product, Order, Payment, Notification, Review, ReviewR
 from .utils import send_fcm_v1, process_stripe_refund
 from django.core.mail import send_mail
 from django.conf import settings
+from .utils import scrape_website, store_scraped_data
+import logging
+import asyncio
+import aiohttp
+
+logger = logging.getLogger(__name__)
 
 @shared_task
 def send_payment_confirmation_email(user_id, order_code):
@@ -176,3 +182,29 @@ def notify_review_reply(review_reply_id):
         )
     except Exception as e:
         print(f"Error notifying review reply for reply {review_reply_id}: {str(e)}")
+
+@shared_task
+def scrape_and_store_websites(urls):
+    """
+    Cào và lưu dữ liệu từ danh sách các URL bất đồng bộ.
+    """
+    async def main(urls):
+        urls = urls[:50]  # Giới hạn 50 URL mỗi lần chạy
+        tasks = [scrape_website(url) for url in urls]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for url, result in zip(urls, results):
+            if isinstance(result, Exception):
+                continue  # Lỗi đã được log trong scrape_website
+            if not isinstance(result, dict):
+                logger.error(f"Kết quả không phải dictionary từ {url}: {result}")
+                continue
+            if result.get('success'):
+                store_result = store_scraped_data(result)
+                if store_result.get('success'):
+                    logger.info(f"Đã cào và lưu dữ liệu từ {url}")
+                else:
+                    logger.error(f"Lỗi khi lưu dữ liệu từ {url}: {store_result.get('error', 'Lỗi không xác định')}")
+            else:
+                continue  # Lỗi đã được log trong scrape_website
+
+    asyncio.run(main(urls))

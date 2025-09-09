@@ -345,7 +345,7 @@ class ProductViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIV
             return [permissions.AllowAny()]
         elif self.action in ['create', 'my_products']:
             return [IsDistributor()]
-        elif self.action in ['update', 'partial_update', 'destroy']:
+        elif self.action in ['update', 'partial_update', 'destroy', 'unapprove']:
             return [IsDistributor(), IsProductOwner()]
         elif self.action in ['approve', 'review']:
             return [IsAdmin()]
@@ -358,6 +358,14 @@ class ProductViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIV
         product.save()
         # notify_product_approval.delay(product.id)
         return Response({"message": "Trạng thái duyệt sản phẩm đã được cập nhật."})
+
+    @action(detail=True, methods=['post'], url_path='unapprove')
+    def unapprove(self, request, pk=None):
+        product = self.get_object()
+        product.is_approved = False
+        product.save()
+        # notify_product_approval.delay(product.id)
+        return Response({"message": "Sản phẩm đã bị vô hiệu"})
 
     @action(detail=False, methods=['get'], url_path='review')
     def review(self, request):
