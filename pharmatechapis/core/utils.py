@@ -1,5 +1,4 @@
 import aiohttp
-import json
 from django.utils import timezone
 import firebase_admin
 from firebase_admin import auth as admin_auth, messaging, credentials, db
@@ -8,6 +7,8 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 import hashlib
 import stripe
+import asyncio
+import os
 import hmac
 from urllib.parse import quote_plus
 import pyrebase
@@ -17,11 +18,9 @@ import markdownify
 import chromadb
 from llama_index.core import VectorStoreIndex, Document, StorageContext
 from llama_index.vector_stores.chroma import ChromaVectorStore
-from llama_index.llms.gemini import Gemini
 from llama_index.embeddings.gemini import GeminiEmbedding
-import google.generativeai as genai
+from llama_index.core import Settings
 import logging
-import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -200,24 +199,26 @@ async def scrape_website(url):
     Cào dữ liệu từ một trang web và chuyển đổi sang Markdown.
     """
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0'
-        }
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers, timeout=10) as response:
-                response.raise_for_status()
-                text = await response.text()
-        
+        def fetch():
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            return response.text
+
+        text = await asyncio.get_event_loop().run_in_executor(None, fetch)
+
         soup = BeautifulSoup(text, 'html.parser')
         for element in soup(['script', 'style', 'nav', 'footer']):
             element.decompose()
-        
+
         main_content = soup.find('main') or soup.find('article') or soup.find('div', class_='content')
         if not main_content:
             main_content = soup.body
-        
+
         markdown_content = markdownify.markdownify(str(main_content), heading_style="ATX")
-        
+
         return {
             'success': True,
             'url': url,
@@ -227,7 +228,7 @@ async def scrape_website(url):
                 'source': url
             }
         }
-    except aiohttp.ClientError as e:
+    except requests.RequestException as e:
         logger.error(f"Lỗi khi cào dữ liệu từ {url}: {str(e)}")
         return {'success': False, 'url': url, 'error': str(e)}
     except Exception as e:
@@ -240,59 +241,65 @@ def initialize_vector_store():
     Khởi tạo ChromaDB và LlamaIndex vector store.
     """
     try:
-        chroma_client = chromadb.PersistentClient(path="./chroma_db")
-        chroma_collection = chroma_client.get_or_create_collection("healthcare_data")
-        
-        embed_model = GeminiEmbedding(
-            api_key=settings.GEMINI_API_KEY,
-            model_name="models/embedding-001"
-        )
-        
+        # Đảm bảo embed_model được đặt trước
+        if not hasattr(Settings, 'embed_model') or not isinstance(Settings.embed_model, GeminiEmbedding):
+            Settings.embed_model = GeminiEmbedding(
+                api_key=settings.GEMINI_API_KEY,
+                model_name="models/embedding-001"
+            )
+            logger.info("Đã cấu hình GeminiEmbedding với model embedding-001")
+        else:
+            logger.info("GeminiEmbedding đã được cấu hình: %s", type(Settings.embed_model).__name__)
+
+        # Đảm bảo thư mục chroma_db tồn tại
+        chroma_db_path = "./chroma_db"
+        if not os.path.exists(chroma_db_path):
+            os.makedirs(chroma_db_path)
+            logger.info(f"Đã tạo thư mục {chroma_db_path}")
+
+        # Khởi tạo ChromaDB client và collection
+        chroma_client = chromadb.PersistentClient(path=chroma_db_path)
+        chroma_collection = chroma_client.get_or_create_collection("pharmatech_collection")
+        logger.info("Đã khởi tạo ChromaDB collection: pharmatech_collection")
+
+        # Tạo vector store
         vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
-        
+
+        # Khởi tạo VectorStoreIndex
         index = VectorStoreIndex.from_vector_store(
             vector_store=vector_store,
-            embed_model=embed_model
+            embed_model=Settings.embed_model
         )
+        logger.info("Đã khởi tạo VectorStoreIndex")
         return index, chroma_collection
     except Exception as e:
         logger.error(f"Lỗi khi khởi tạo vector store: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise
 
-def store_scraped_data(scraped_data):
+def store_scraped_data(data):
     """
     Lưu dữ liệu đã cào vào ChromaDB.
     """
     try:
-        # Kiểm tra dữ liệu đầu vào
-        if not scraped_data.get('success'):
-            return {'success': False, 'error': 'Dữ liệu cào không hợp lệ.'}
-        
-        # Tạo client ChromaDB
-        chroma_client = chromadb.PersistentClient(path="./chroma_db")
-        chroma_collection = chroma_client.get_or_create_collection("pharmatech_collection")
+        # Đảm bảo embed_model được đặt
+        if not hasattr(Settings, 'embed_model') or not isinstance(Settings.embed_model, GeminiEmbedding):
+            Settings.embed_model = GeminiEmbedding(
+                api_key=settings.GEMINI_API_KEY,
+                model_name="models/embedding-001"
+            )
+            logger.info("Đã cấu hình GeminiEmbedding trong store_scraped_data")
 
-        # Tạo vector store
-        vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
-        storage_context = StorageContext.from_defaults(vector_store=vector_store)
-
-        # Tạo document từ dữ liệu cào
-        document = Document(
-            text=scraped_data['content'],
-            metadata=scraped_data['metadata']
-        )
-
-        # Lưu vào ChromaDB
-        index = VectorStoreIndex.from_documents(
-            [document],
-            storage_context=storage_context
-        )
-        index.storage_context.persist(persist_dir="./chroma_db")
-
-        logger.info(f"Đã lưu dữ liệu từ {scraped_data['url']} vào ChromaDB")
+        index, _ = initialize_vector_store()
+        document = Document(text=data.get('content'), metadata={'url': data.get('url')})
+        index.insert(document)
+        logger.info(f"Đã lưu dữ liệu từ {data.get('url')} vào ChromaDB")
         return {'success': True}
     except Exception as e:
         logger.error(f"Lỗi khi lưu dữ liệu vào ChromaDB: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return {'success': False, 'error': str(e)}
 
 # --- Chatbot Utilities ---
@@ -300,50 +307,70 @@ async def call_gemini_api(message, conversation_id=None, user_id=None):
     """
     Gọi Gemini API với ngữ cảnh từ ChromaDB và lịch sử hội thoại.
     """
+    if len(message) > 1000:
+        raise ValueError("Tin nhắn quá dài, tối đa 1000 ký tự.")
+
+    GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent'
+    headers = {'Content-Type': 'application/json'}
+    
+    # Lấy lịch sử hội thoại từ Firebase
+    previous_messages = []
+    if conversation_id and user_id:
+        try:
+            messages = await sync_to_async(get_messages_from_firebase)(conversation_id, user_id, limit=4)
+            previous_messages = messages[-4:]
+        except Exception:
+            previous_messages = []
+    
+    conversation_history = ""
+    total_history_length = 0
+    for msg in previous_messages:
+        msg_text = msg['message'] if msg['message_type'] == 'user' else msg['response']
+        if total_history_length + len(msg_text) <= 2000:
+            role = "Người dùng" if msg['message_type'] == 'user' else "Trợ lý"
+            conversation_history += f"{role}: {msg_text}\n"
+            total_history_length += len(msg_text)
+    
+    # Lấy ngữ cảnh từ ChromaDB
+    index, _ = initialize_vector_store()
+    query_engine = index.as_query_engine()
+    context = await asyncio.to_thread(query_engine.query, message)
+    context_text = str(context)[:4000]
+    
+    prompt = (
+        f"Bạn là một trợ lý y tế thông minh, trả lời bằng tiếng Việt. "
+        f"Không chẩn đoán bệnh, chỉ cung cấp thông tin và hướng dẫn sơ bộ. "
+        f"Ngữ cảnh từ dữ liệu cào web:\n{context_text}\n"
+        f"Lịch sử hội thoại:\n{conversation_history}\n"
+        f"Người dùng: {message}"
+    )
+    
+    data = {
+        'contents': [{'parts': [{'text': prompt}]}],
+        'generationConfig': {'maxOutputTokens': 150, 'temperature': 0.7}
+    }
+    
     try:
-        genai.configure(api_key=settings.GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-1.5-pro')
-        
-        # Lấy lịch sử hội thoại từ Firebase
-        previous_messages = []
-        if conversation_id and user_id:
-            try:
-                messages = await sync_to_async(get_messages_from_firebase)(conversation_id, user_id, limit=4)
-                previous_messages = messages[-4:]
-            except Exception:
-                previous_messages = []
-        
-        conversation_history = ""
-        total_history_length = 0
-        for msg in previous_messages:
-            msg_text = msg['message'] if msg['message_type'] == 'user' else msg['response']
-            if total_history_length + len(msg_text) <= 2000:
-                role = "Người dùng" if msg['message_type'] == 'user' else "Trợ lý"
-                conversation_history += f"{role}: {msg_text}\n"
-                total_history_length += len(msg_text)
-        
-        # Lấy ngữ cảnh từ ChromaDB
-        index, _ = initialize_vector_store()
-        query_engine = index.as_query_engine()
-        context = await asyncio.to_thread(query_engine.query, message)
-        context_text = str(context)[:4000]
-        
-        prompt = (
-            f"Bạn là một trợ lý y tế thông minh, trả lời bằng tiếng Việt. "
-            f"Không chẩn đoán bệnh, chỉ cung cấp thông tin và hướng dẫn sơ bộ. "
-            f"Ngữ cảnh từ dữ liệu cào web:\n{context_text}\n"
-            f"Lịch sử hội thoại:\n{conversation_history}\n"
-            f"Người dùng: {message}"
-        )
-        
-        response = await asyncio.to_thread(model.generate_content, prompt)
-        response_text = response.text[:1000]
-        
-        return {
-            'success': True,
-            'response': response_text,
-            'context': context_text
-        }
-    except Exception as e:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f'{GEMINI_API_URL}?key={settings.GEMINI_API_KEY}',
+                headers=headers,
+                json=data
+            ) as response:
+                response.raise_for_status()
+                result = await response.json()
+                if 'candidates' not in result or not result['candidates']:
+                    raise ValueError("Không nhận được phản hồi hợp lệ từ Gemini API.")
+                response_text = result['candidates'][0]['content']['parts'][0]['text'][:1000]
+                
+                return {
+                    'success': True,
+                    'response': response_text,
+                    'context': context_text
+                }
+    except aiohttp.ClientError as e:
         logger.error(f"Lỗi khi gọi Gemini API: {str(e)}")
+        return {'success': False, 'error': str(e)}
+    except KeyError as e:
+        logger.error(f"Định dạng phản hồi Gemini API không đúng: {str(e)}")
         return {'success': False, 'error': str(e)}

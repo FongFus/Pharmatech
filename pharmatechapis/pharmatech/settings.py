@@ -4,6 +4,11 @@ import pymysql
 import cloudinary
 from decouple import config
 from celery.schedules import crontab
+from llama_index.core import Settings
+from llama_index.embeddings.gemini import GeminiEmbedding
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -332,8 +337,17 @@ CELERY_BEAT_SCHEDULE = {
         'schedule': crontab(hour=0, minute=0),  # Chạy hàng ngày lúc nửa đêm
         'args': ([
             'https://www.who.int/news-room/fact-sheets',
-            'https://www.cdc.gov/health-topics.html',
             # Thêm các URL khác
         ],),
     },
 }
+
+# Cấu hình LlamaIndex embedding model
+try:
+    Settings.embed_model = GeminiEmbedding(
+        api_key=config('GEMINI_API_KEY'),
+        model_name="models/embedding-001"
+    )
+    logger.info("Đã cấu hình GeminiEmbedding trong settings.py")
+except Exception as e:
+    logger.error(f"Lỗi khi cấu hình GeminiEmbedding: {str(e)}")

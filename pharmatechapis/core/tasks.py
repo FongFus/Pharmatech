@@ -189,12 +189,13 @@ def scrape_and_store_websites(urls):
     Cào và lưu dữ liệu từ danh sách các URL bất đồng bộ.
     """
     async def main(urls):
-        urls = urls[:50]  # Giới hạn 50 URL mỗi lần chạy
+        urls = urls[:50]
         tasks = [scrape_website(url) for url in urls]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for url, result in zip(urls, results):
             if isinstance(result, Exception):
-                continue  # Lỗi đã được log trong scrape_website
+                logger.error(f"Lỗi khi cào dữ liệu từ {url}: {str(result)}")
+                continue
             if not isinstance(result, dict):
                 logger.error(f"Kết quả không phải dictionary từ {url}: {result}")
                 continue
@@ -205,6 +206,5 @@ def scrape_and_store_websites(urls):
                 else:
                     logger.error(f"Lỗi khi lưu dữ liệu từ {url}: {store_result.get('error', 'Lỗi không xác định')}")
             else:
-                continue  # Lỗi đã được log trong scrape_website
-
+                logger.error(f"Lỗi khi cào dữ liệu từ {url}: {result.get('error', 'Lỗi không xác định')}")
     asyncio.run(main(urls))

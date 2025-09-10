@@ -680,18 +680,18 @@ class CategoryViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.Upd
         return [IsCategoryManager()]
 
 # Inventory ViewSet
-class InventoryViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.UpdateAPIView, generics.DestroyAPIView):
+class InventoryViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.RetrieveAPIView, generics.UpdateAPIView, generics.DestroyAPIView):
     authentication_classes = [CustomOAuth2Authentication]
     queryset = Inventory.objects.all()
     serializer_class = InventorySerializer
     permission_classes = [IsDistributor, IsInventoryManager]
     pagination_class = ItemPaginator
     filter_backends = [SearchFilter]
-    search_fields = ['product_name']
+    search_fields = ['product__name']
 
     def get_queryset(self):
         if self.request.user.is_authenticated:
-            return self.queryset.filter(distributor=self.request.user)
+            return self.queryset.filter(distributor=self.request.user).select_related('product')
         return self.queryset.none()
 
     def create(self, request, *args, **kwargs):
@@ -699,6 +699,75 @@ class InventoryViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.Up
         serializer.is_valid(raise_exception=True)
         serializer.save(distributor=request.user)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['post'], url_path='bulk-create')
+    def bulk_create(self, request):
+        """Bulk create inventory items"""
+        items_data = request.data
+        if not isinstance(items_data, list):
+            return Response({'error': 'Expected a list of inventory items'}, status=status.HTTP_400_BAD_REQUEST)
+
+        created_items = []
+        errors = []
+
+        for i, item_data in enumerate(items_data):
+            serializer = self.get_serializer(data=item_data, context={'request': request})
+            if serializer.is_valid():
+                try:
+                    inventory_item = serializer.save(distributor=request.user)
+                    created_items.append(serializer.data)
+                except Exception as e:
+                    errors.append({'index': i, 'error': str(e), 'data': item_data})
+            else:
+                errors.append({'index': i, 'error': serializer.errors, 'data': item_data})
+
+        response_data = {
+            'created_count': len(created_items),
+            'error_count': len(errors),
+            'created_items': created_items,
+            'errors': errors
+        }
+
+        if errors:
+            return Response(response_data, status=status.HTTP_207_MULTI_STATUS)
+        return Response(response_data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['delete'], url_path='bulk-delete')
+    def bulk_delete(self, request):
+        """Bulk delete inventory items"""
+        ids = request.data.get('ids', [])
+        if not ids:
+            return Response({'error': 'No IDs provided'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Filter items that belong to the current user
+        user_inventory = self.get_queryset()
+        items_to_delete = user_inventory.filter(id__in=ids)
+
+        deleted_count = items_to_delete.count()
+        items_to_delete.delete()
+
+        return Response({
+            'message': f'Successfully deleted {deleted_count} inventory items',
+            'deleted_count': deleted_count
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'], url_path='low-stock')
+    def low_stock(self, request):
+        """Get inventory items with low stock (quantity < threshold)"""
+        threshold = request.query_params.get('threshold', 10)
+        try:
+            threshold = int(threshold)
+        except ValueError:
+            threshold = 10
+
+        queryset = self.get_queryset().filter(quantity__lt=threshold)
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
 
 # Discount ViewSet
 class DiscountViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.UpdateAPIView, generics.DestroyAPIView, generics.RetrieveAPIView):
