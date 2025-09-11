@@ -386,11 +386,12 @@ class NotificationSerializer(ModelSerializer):
 class ReviewSerializer(ModelSerializer):
     product_name = serializers.SerializerMethodField()
     order_code = serializers.SerializerMethodField()
-    product_id = serializers.PrimaryKeyRelatedField(queryset=Product.objects.filter(is_approved=True), source='product', write_only=True)
+    product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.filter(is_approved=True), write_only=True)
+    order = serializers.PrimaryKeyRelatedField(queryset=Order.objects.all(), required=False, allow_null=True)
 
     class Meta:
         model = Review
-        fields = ['id', 'user', 'product', 'order', 'rating', 'comment', 'created_at', 'updated_at', 'product_name', 'order_code', 'product_id']
+        fields = ['id', 'user', 'product', 'order', 'rating', 'comment', 'created_at', 'updated_at', 'product_name', 'order_code']
         read_only_fields = ['id', 'user', 'created_at', 'updated_at', 'product_name', 'order_code']
 
     def validate(self, data):

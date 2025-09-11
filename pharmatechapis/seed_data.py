@@ -106,7 +106,10 @@ def create_categories():
 # Hàm tạo sản phẩm
 def create_products(num_products, distributors, categories):
     products = []
+    # Ensure roughly half approved, half not
+    approved_count = num_products // 2
     for i, name in enumerate(MEDICAL_PRODUCTS[:num_products], 1):
+        is_approved = True if i <= approved_count else False
         product = Product.objects.create(
             distributor=random.choice(distributors),
             name=name,
@@ -114,7 +117,7 @@ def create_products(num_products, distributors, categories):
             category=random.choice(categories),
             price=Decimal(str(round(random.uniform(50000.0, 2000000.0), 0))),
             image=None,
-            is_approved=random.choice([True, False])
+            is_approved=is_approved
         )
         products.append(product)
     return products
@@ -176,7 +179,7 @@ def create_cart_items(carts, products):
 def create_orders(customers, products, discounts):
     orders = []
     for customer in customers:
-        num_orders = random.randint(1, 3)
+        num_orders = random.randint(5, 10)
         for _ in range(num_orders):
             order = Order.objects.create(
                 user=customer,
@@ -244,7 +247,7 @@ def create_notifications(users, orders, products):
 def create_reviews(customers, orders, products):
     reviews = []
     for customer in customers:
-        num_reviews = random.randint(1, 3)
+        num_reviews = random.randint(5, 10)
         selected_orders = random.sample(orders, min(num_reviews, len(orders))) if orders else []
         for order in selected_orders:
             if order.user == customer:
@@ -259,6 +262,18 @@ def create_reviews(customers, orders, products):
                         comment=fake.text(max_nb_chars=200).replace('\n', ' ')
                     )
                     reviews.append(review)
+        # Create additional reviews without orders for random products to increase data and ensure coverage
+        num_additional = random.randint(2, 5)
+        for _ in range(num_additional):
+            product = random.choice(products)
+            review = Review.objects.create(
+                user=customer,
+                product=product,
+                order=None,
+                rating=random.randint(1, 5),
+                comment=fake.text(max_nb_chars=200).replace('\n', ' ')
+            )
+            reviews.append(review)
     return reviews
 
 # Hàm tạo phản hồi đánh giá
@@ -299,13 +314,13 @@ def main():
     ReviewReply.objects.all().delete()
 
     # Tạo dữ liệu
-    users = create_users(10)
+    users = create_users(100)
     customers = [u for u in users if u.role == 'customer']
     distributors = [u for u in users if u.role == 'distributor']
     admins = [u for u in users if u.role == 'admin']
     
     categories = create_categories()
-    products = create_products(20, distributors, categories)
+    products = create_products(50, distributors, categories)
     create_inventories(products, distributors)
     discounts = create_discounts()
     carts = create_carts(customers)

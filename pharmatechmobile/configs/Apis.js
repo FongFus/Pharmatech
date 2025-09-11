@@ -70,6 +70,7 @@ const endpoints = {
   reviewsCreate: `${BASE_URL}reviews/`,
   reviewsUpdate: id => `${BASE_URL}reviews/${id}/`,
   reviewsDelete: id => `${BASE_URL}reviews/${id}/`,
+  reviewsProduct: product_id => `${BASE_URL}reviews/product/${product_id}/reviews/`,
   discountsApply: `${BASE_URL}discounts/apply/`,
   statistics: `${BASE_URL}statistics/`,
 };

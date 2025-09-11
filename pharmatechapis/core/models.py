@@ -238,6 +238,7 @@ class Order(models.Model):
             self.discount_amount = discount_amount
             self.discount.uses_count = F('uses_count') + 1
             self.discount.save()
+            self.discount.refresh_from_db()
             self.save()
         else:
             raise ValueError(message)

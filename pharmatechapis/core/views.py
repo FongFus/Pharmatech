@@ -899,7 +899,7 @@ class ReviewViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.Retri
     def get_queryset(self):
         if self.request.user.is_authenticated:
             user = self.request.user
-            if self.action in ['list', 'retrieve']:
+            if self.action in ['list', 'retrieve', 'product_reviews']:
                 return Review.objects.all()
             elif user.role == 'customer':
                 return Review.objects.filter(user=user)
@@ -914,6 +914,39 @@ class ReviewViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.Retri
         serializer.is_valid(raise_exception=True)
         serializer.save(user=request.user)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['get', 'post'], url_path='product/(?P<product_id>\d+)/reviews')
+    def product_reviews(self, request, product_id=None):
+        """
+        Lấy danh sách review của một sản phẩm dựa trên product_id hoặc tạo review mới cho sản phẩm đó.
+        Hỗ trợ phân trang, lọc theo rating và sắp xếp theo created_at hoặc rating.
+        """
+        # Kiểm tra sản phẩm tồn tại
+        product = get_object_or_404(Product, id=product_id, is_approved=True)
+
+        if request.method == 'GET':
+            # Lấy queryset review cho sản phẩm
+            queryset = self.get_queryset().filter(product=product)
+            queryset = self.filter_queryset(queryset)
+
+            # Phân trang
+            page = self.paginate_queryset(queryset)
+            if page is not None:
+                serializer = self.get_serializer(page, many=True)
+                return self.get_paginated_response(serializer.data)
+
+            # Serialize dữ liệu nếu không phân trang
+            serializer = self.get_serializer(queryset, many=True)
+            return Response(serializer.data)
+
+        elif request.method == 'POST':
+            # Tạo review mới cho sản phẩm
+            data = request.data.copy()
+            data['product'] = product_id  # Set product from URL
+            serializer = self.get_serializer(data=data, context={'request': request})
+            serializer.is_valid(raise_exception=True)
+            serializer.save(user=request.user)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 # ReviewReply ViewSet
 class ReviewReplyViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.RetrieveAPIView, generics.UpdateAPIView, generics.DestroyAPIView):
