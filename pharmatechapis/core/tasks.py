@@ -189,7 +189,7 @@ def scrape_and_store_websites(urls):
     Cào và lưu dữ liệu từ danh sách các URL bất đồng bộ.
     """
     async def main(urls):
-        urls = urls[:50]
+        urls = urls[:2]  # Giới hạn 2 URL
         tasks = [scrape_website(url) for url in urls]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for url, result in zip(urls, results):
@@ -200,6 +200,7 @@ def scrape_and_store_websites(urls):
                 logger.error(f"Kết quả không phải dictionary từ {url}: {result}")
                 continue
             if result.get('success'):
+                logger.debug(f"scrape_website result: {result}")
                 store_result = store_scraped_data(result)
                 if store_result.get('success'):
                     logger.info(f"Đã cào và lưu dữ liệu từ {url}")
@@ -207,4 +208,11 @@ def scrape_and_store_websites(urls):
                     logger.error(f"Lỗi khi lưu dữ liệu từ {url}: {store_result.get('error', 'Lỗi không xác định')}")
             else:
                 logger.error(f"Lỗi khi cào dữ liệu từ {url}: {result.get('error', 'Lỗi không xác định')}")
-    asyncio.run(main(urls))
+    
+    # Sử dụng event loop mới để tránh xung đột trên Windows
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(main(urls))
+    finally:
+        loop.close()

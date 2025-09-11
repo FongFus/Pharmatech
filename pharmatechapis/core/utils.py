@@ -5,6 +5,7 @@ from firebase_admin import auth as admin_auth, messaging, credentials, db
 from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from .models import DeviceToken
 import hashlib
 import stripe
 import asyncio
@@ -21,6 +22,8 @@ from llama_index.vector_stores.chroma import ChromaVectorStore
 from llama_index.embeddings.gemini import GeminiEmbedding
 from llama_index.core import Settings
 import logging
+import time
+import random
 
 logger = logging.getLogger(__name__)
 
@@ -218,7 +221,10 @@ async def scrape_website(url):
             main_content = soup.body
 
         markdown_content = markdownify.markdownify(str(main_content), heading_style="ATX")
-
+        
+        # Kiểm tra và log kiểu dữ liệu
+        logger.debug(f"scrape_website: url={url}, type(markdown_content)={type(markdown_content)}, length={len(markdown_content)}")
+        
         return {
             'success': True,
             'url': url,
@@ -238,39 +244,28 @@ async def scrape_website(url):
 # --- Vector Store Utilities ---
 def initialize_vector_store():
     """
-    Khởi tạo ChromaDB và LlamaIndex vector store.
+    Khởi tạo ChromaDB và VectorStoreIndex.
     """
     try:
-        # Đảm bảo embed_model được đặt trước
-        if not hasattr(Settings, 'embed_model') or not isinstance(Settings.embed_model, GeminiEmbedding):
-            Settings.embed_model = GeminiEmbedding(
-                api_key=settings.GEMINI_API_KEY,
-                model_name="models/embedding-001"
-            )
-            logger.info("Đã cấu hình GeminiEmbedding với model embedding-001")
-        else:
-            logger.info("GeminiEmbedding đã được cấu hình: %s", type(Settings.embed_model).__name__)
-
-        # Đảm bảo thư mục chroma_db tồn tại
-        chroma_db_path = "./chroma_db"
-        if not os.path.exists(chroma_db_path):
-            os.makedirs(chroma_db_path)
-            logger.info(f"Đã tạo thư mục {chroma_db_path}")
-
-        # Khởi tạo ChromaDB client và collection
-        chroma_client = chromadb.PersistentClient(path=chroma_db_path)
-        chroma_collection = chroma_client.get_or_create_collection("pharmatech_collection")
-        logger.info("Đã khởi tạo ChromaDB collection: pharmatech_collection")
-
-        # Tạo vector store
+        # Khởi tạo ChromaDB client
+        chroma_client = chromadb.PersistentClient(path="./chroma_db")
+        logger.info("Đã khởi tạo ChromaDB client")
+        
+        # Tạo hoặc lấy collection
+        try:
+            chroma_collection = chroma_client.get_collection("pharmatech_collection")
+            logger.info("Đã lấy collection pharmatech_collection")
+        except Exception:
+            chroma_collection = chroma_client.create_collection("pharmatech_collection")
+            logger.info("Đã tạo collection pharmatech_collection")
+        
+        # Khởi tạo vector store
         vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
-
-        # Khởi tạo VectorStoreIndex
-        index = VectorStoreIndex.from_vector_store(
-            vector_store=vector_store,
-            embed_model=Settings.embed_model
-        )
+        
+        # Khởi tạo index
+        index = VectorStoreIndex.from_vector_store(vector_store=vector_store)
         logger.info("Đã khởi tạo VectorStoreIndex")
+        
         return index, chroma_collection
     except Exception as e:
         logger.error(f"Lỗi khi khởi tạo vector store: {str(e)}")
@@ -282,25 +277,78 @@ def store_scraped_data(data):
     """
     Lưu dữ liệu đã cào vào ChromaDB.
     """
-    try:
-        # Đảm bảo embed_model được đặt
-        if not hasattr(Settings, 'embed_model') or not isinstance(Settings.embed_model, GeminiEmbedding):
-            Settings.embed_model = GeminiEmbedding(
-                api_key=settings.GEMINI_API_KEY,
-                model_name="models/embedding-001"
-            )
-            logger.info("Đã cấu hình GeminiEmbedding trong store_scraped_data")
+    max_retries = 5
+    retry_delay = 1  # Bắt đầu với 1 giây
 
-        index, _ = initialize_vector_store()
-        document = Document(text=data.get('content'), metadata={'url': data.get('url')})
-        index.insert(document)
-        logger.info(f"Đã lưu dữ liệu từ {data.get('url')} vào ChromaDB")
-        return {'success': True}
-    except Exception as e:
-        logger.error(f"Lỗi khi lưu dữ liệu vào ChromaDB: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return {'success': False, 'error': str(e)}
+    for attempt in range(max_retries):
+        try:
+            if not hasattr(Settings, 'embed_model') or not isinstance(Settings.embed_model, GeminiEmbedding):
+                Settings.embed_model = GeminiEmbedding(
+                    api_key=settings.GEMINI_API_KEY,
+                    model_name="models/gemini-embedding-001"
+                )
+                logger.info("Đã cấu hình GeminiEmbedding trong store_scraped_data với models/gemini-embedding-001")
+
+            content = data.get('content')
+            url = data.get('url')
+            if not content or not url:
+                logger.error(f"Dữ liệu không hợp lệ: content={len(content) if content else None}, url={url}")
+                return {'success': False, 'error': 'Dữ liệu không hợp lệ'}
+
+            # Nếu content là list, nối lại thành chuỗi
+            if isinstance(content, list):
+                content = '\n'.join([str(c) for c in content])
+            # Nếu không phải chuỗi, chuyển về chuỗi
+            if not isinstance(content, str):
+                content = str(content)
+            content = content[:10000]  # Giới hạn 10,000 ký tự
+
+            # Khởi tạo vector store
+            index, _ = initialize_vector_store()
+
+            # Tạo Document với doc_id rõ ràng
+            document = Document(
+                text=content,
+                metadata={'url': url},
+                doc_id=url
+            )
+            logger.debug(f"Document type after creation: {type(document)}; value: {document}")
+            if isinstance(document, list):
+                logger.error(f"Document is a list after creation. Elements:")
+                for i, doc_item in enumerate(document):
+                    logger.error(f"  [{i}] type: {type(doc_item)}, value: {doc_item}")
+                return {'success': False, 'error': 'Document is a list after creation'}
+            if not isinstance(document, Document):
+                logger.error(f"Document is not a Document instance: {type(document)}; value: {document}")
+                return {'success': False, 'error': 'Document is not a Document instance'}
+            
+            logger.debug(f"Index type: {type(index)}")
+            logger.debug(f"index.insert input type: {type([document])}, content: {[type(document) for document in [document]]}")
+            try:
+                index.insert([document])
+            except Exception as e:
+                logger.error(f"index.insert([document]) failed: {str(e)}. Trying index.insert(document) directly.")
+                try:
+                    index.insert(document)
+                    logger.info(f"Đã chèn document trực tiếp từ {url} vào ChromaDB")
+                except Exception as e2:
+                    logger.error(f"index.insert(document) also failed: {str(e2)}")
+                    return {'success': False, 'error': f'index.insert error: {str(e)} / {str(e2)}'}
+            logger.info(f"Đã chèn document từ {url} vào ChromaDB")
+            
+            logger.info(f"Đã lưu dữ liệu từ {url} vào ChromaDB")
+            return {'success': True}
+        except Exception as e:
+            if "429" in str(e) and attempt < max_retries - 1:
+                logger.warning(f"Lỗi 429, thử lại sau {retry_delay} giây...")
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+                retry_delay += random.uniform(0, 0.1)  # Jitter
+                continue
+            logger.error(f"Lỗi khi lưu dữ liệu vào ChromaDB: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return {'success': False, 'error': str(e)}
 
 # --- Chatbot Utilities ---
 async def call_gemini_api(message, conversation_id=None, user_id=None):
