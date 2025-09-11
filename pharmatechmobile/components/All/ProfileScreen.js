@@ -8,7 +8,6 @@ import {
   Alert,
   Modal,
   TouchableOpacity,
-  FlatList,
   Image,
   Platform,
   KeyboardAvoidingView,
@@ -36,9 +35,7 @@ const ProfileScreen = ({ navigation }) => {
   const dispatch = useContext(MyDispatchContext);
   const [changePasswordModal, setChangePasswordModal] = useState(false);
   const [editProfileModal, setEditProfileModal] = useState(false);
-  const [notificationsModal, setNotificationsModal] = useState(false);
   const [avatarModal, setAvatarModal] = useState(false);
-  const [notifications, setNotifications] = useState([]);
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -64,8 +61,7 @@ const ProfileScreen = ({ navigation }) => {
     const authApi = authApis(token);
     try {
       const notificationsRes = await authApi.get(endpoints.notificationsList);
-      setNotifications(notificationsRes.data?.results || []);
-      setUnreadNotifications(notificationsRes.data?.filter(n => !n.is_read).length || 0);
+      setUnreadNotifications(notificationsRes.data?.results?.filter(n => !n.is_read).length || 0);
     } catch (error) {
       Alert.alert('Lỗi', 'Không thể tải số liệu');
     }
@@ -124,9 +120,8 @@ const ProfileScreen = ({ navigation }) => {
     }
   };
 
-  const handleViewNotifications = async () => {
-    await fetchUserStats();
-    setNotificationsModal(true);
+  const handleViewNotifications = () => {
+    navigation.navigate('NotificationScreen');
   };
 
   const handleUploadAvatar = async () => {
@@ -231,12 +226,6 @@ const ProfileScreen = ({ navigation }) => {
         </Button>
         <Button mode="contained" style={styles.button} onPress={() => setChangePasswordModal(true)}>
           <MaterialIcons name="lock" size={20} color={colors.white} /> Đổi mật khẩu
-        </Button>
-        <Button mode="contained" style={styles.button} onPress={handleViewNotifications}>
-          <MaterialIcons name="notifications" size={20} color={colors.white} /> Xem thông báo
-        </Button>
-        <Button mode="contained" style={styles.button} onPress={handleUploadAvatar}>
-          <MaterialIcons name="camera-alt" size={20} color={colors.white} /> Cập nhật ảnh đại diện
         </Button>
         <Button mode="outlined" style={styles.deactivateButton} onPress={handleDeactivate}>
           <MaterialIcons name="block" size={20} color={colors.accent} /> Vô hiệu hóa tài khoản
@@ -353,34 +342,7 @@ const ProfileScreen = ({ navigation }) => {
           </KeyboardAvoidingView>
         </Modal>
 
-        {/* Notifications Modal */}
-        <Modal visible={notificationsModal} animationType="slide" transparent>
-          <View style={styles.modalContainer}>
-            <View style={styles.modalContent}>
-              <Title style={styles.modalHeader}>Thông báo</Title>
-              <FlatList
-                data={notifications}
-                keyExtractor={(item) => item.id.toString()}
-                renderItem={({ item }) => (
-                  <View style={styles.notificationItem}>
-                    <View style={styles.notificationText}>
-                      <Text style={styles.notificationTitle}>{item.title}</Text>
-                      <Text style={styles.notificationMessage}>{item.message}</Text>
-                    </View>
-                    {!item.is_read && (
-                      <View style={styles.badge}>
-                        <Text style={styles.badgeText}>Mới</Text>
-                      </View>
-                    )}
-                  </View>
-                )}
-              />
-              <Button mode="contained" onPress={() => setNotificationsModal(false)} style={styles.closeButton}>
-                Đóng
-              </Button>
-            </View>
-          </View>
-        </Modal>
+
 
         {/* Avatar Modal */}
         <Modal visible={avatarModal} animationType="slide" transparent>
@@ -532,40 +494,7 @@ const styles = StyleSheet.create({
     marginLeft: 8,
     backgroundColor: colors.primary,
   },
-  closeButton: {
-    marginTop: 16,
-    backgroundColor: colors.primary,
-  },
-  notificationItem: {
-    padding: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.gray,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  notificationText: {
-    flex: 1,
-  },
-  notificationTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: colors.text,
-    marginBottom: 4,
-  },
-  notificationMessage: {
-    fontSize: 14,
-    color: colors.text,
-  },
-  badge: {
-    backgroundColor: colors.accent,
-    borderRadius: 10,
-    padding: 5,
-  },
-  badgeText: {
-    color: colors.white,
-    fontSize: 12,
-  },
+
   avatarPreview: {
     width: 100,
     height: 100,
