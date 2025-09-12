@@ -915,6 +915,22 @@ class ReviewViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.Retri
         serializer.save(user=request.user)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
+    @action(detail=False, methods=['get'], url_path='my-reviews', permission_classes=[IsDistributor])
+    def my_reviews(self, request):
+        """
+        Lấy danh sách review của các sản phẩm do nhà phân phối sở hữu.
+        """
+        queryset = Review.objects.filter(product__distributor=request.user)
+        queryset = self.filter_queryset(queryset)
+
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
     @action(detail=False, methods=['get', 'post'], url_path='product/(?P<product_id>\d+)/reviews')
     def product_reviews(self, request, product_id=None):
         """

@@ -80,7 +80,7 @@ const ReviewScreen = () => {
   // Fix for hasReviewed logic: ensure user and user.id exist and compare correctly
   const hasReviewed = React.useMemo(() => {
     if (!user || !user.id) return false;
-    return reviews.some(r => r.user && r.user.id === user.id);
+    return reviews.some(r => r.user_details && r.user_details.id === user.id);
   }, [reviews, user]);
 
   const handleSubmitReview = async () => {
@@ -161,8 +161,19 @@ const ReviewScreen = () => {
     <View style={styles.item}>
       {renderStars(item.rating)}
       {item.comment ? <Text style={styles.comment}>{item.comment}</Text> : null}
-      <Text style={styles.username}>{item.user.username}</Text>
+            <Text style={styles.username}>{item.user_details.full_name} ({item.user_details.username})</Text>
       <Text style={styles.createdAt}>{moment(item.created_at).fromNow()}</Text>
+      {item.replies && item.replies.length > 0 && (
+        <View style={styles.repliesContainer}>
+          {item.replies.map(reply => (
+            <View key={reply.id} style={styles.reply}>
+              <Text style={styles.replyUser}>{reply.user_details.full_name} ({reply.user_details.username})</Text>
+              <Text style={styles.replyComment}>{reply.comment}</Text>
+              <Text style={styles.replyCreatedAt}>{moment(reply.created_at).fromNow()}</Text>
+            </View>
+          ))}
+        </View>
+      )}
     </View>
   );
 
@@ -338,6 +349,33 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 18,
     fontWeight: '600',
+  },
+  repliesContainer: {
+    marginTop: 8,
+    paddingLeft: 16,
+    borderLeftWidth: 2,
+    borderLeftColor: '#ccc',
+  },
+  reply: {
+    marginBottom: 8,
+  },
+  replyUser: {
+    fontSize: 14,
+    fontFamily: Platform.select({ ios: 'Helvetica-Bold', android: 'Roboto-Bold' }),
+    fontWeight: '600',
+    color: '#007AFF',
+  },
+  replyComment: {
+    fontSize: 14,
+    fontFamily: Platform.select({ ios: 'Helvetica', android: 'Roboto' }),
+    fontWeight: '400',
+    marginVertical: 2,
+  },
+  replyCreatedAt: {
+    fontSize: 12,
+    fontFamily: Platform.select({ ios: 'Helvetica', android: 'Roboto' }),
+    fontWeight: '400',
+    color: '#999',
   },
 });
 

@@ -71,6 +71,7 @@ const endpoints = {
   reviewsUpdate: id => `${BASE_URL}reviews/${id}/`,
   reviewsDelete: id => `${BASE_URL}reviews/${id}/`,
   reviewsProduct: product_id => `${BASE_URL}reviews/product/${product_id}/reviews/`,
+  reviewReplies: `${BASE_URL}review-replies/`,
   discountsApply: `${BASE_URL}discounts/apply/`,
   statistics: `${BASE_URL}statistics/`,
 };
