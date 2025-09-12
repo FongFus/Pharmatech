@@ -112,6 +112,36 @@ def system_statistics(request):
         'unread_notification_count': unread_notification_count,
     })
 
+# Distributor Revenue Statistics
+@api_view(['GET'])
+@permission_classes([IsDistributor])
+def distributor_revenue_statistics(request):
+    # Tính tổng doanh thu từ các đơn hàng đã hoàn thành của nhà phân phối
+    total_revenue = OrderItem.objects.filter(
+        product__distributor=request.user,
+        order__status='completed'
+    ).aggregate(total=Sum('price'))['total'] or 0
+
+    # Tính tổng số đơn hàng đã hoàn thành
+    total_orders = Order.objects.filter(
+        items__product__distributor=request.user,
+        status='completed'
+    ).distinct().count()
+
+    # Lấy danh sách sản phẩm bán chạy nhất (top 5)
+    trending_products = OrderItem.objects.filter(
+        product__distributor=request.user,
+        order__status='completed'
+    ).values('product__name').annotate(
+        total_sold=Sum('quantity')
+    ).order_by('-total_sold')[:5]
+
+    return Response({
+        'total_revenue': str(total_revenue),
+        'total_orders': total_orders,
+        'trending_products': list(trending_products),
+    })
+
 # User ViewSet
 class UserViewSet(viewsets.ViewSet, generics.CreateAPIView, generics.ListAPIView):
     authentication_classes = [CustomOAuth2Authentication]

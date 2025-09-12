@@ -74,6 +74,7 @@ const endpoints = {
   reviewReplies: `${BASE_URL}review-replies/`,
   discountsApply: `${BASE_URL}discounts/apply/`,
   statistics: `${BASE_URL}statistics/`,
+  distributorStatistics: `${BASE_URL}distributor-statistics/`,
 };
 
 // Hàm xóa dữ liệu cục bộ khi token không hợp lệ
