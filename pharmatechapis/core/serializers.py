@@ -82,9 +82,11 @@ class UserDetailSerializer(ModelSerializer):
 # Serializer cho Product
 class ProductSerializer(ModelSerializer):
     total_stock = serializers.SerializerMethodField()
+    distributor_name = serializers.CharField(source='distributor.full_name', read_only=True)
+    category_name = serializers.CharField(source='category.name', read_only=True, allow_null=True)
     class Meta:
         model = Product
-        fields = ['id', 'distributor', 'name', 'description', 'category', 'price', 'total_stock', 'image', 'is_approved', 'created_at', 'updated_at']
+        fields = ['id', 'distributor', 'distributor_name', 'name', 'description', 'category', 'category_name', 'price', 'total_stock', 'image', 'is_approved', 'created_at', 'updated_at']
         read_only_fields = ['id', 'distributor', 'created_at', 'updated_at', 'is_approved']
 
     def get_total_stock(self, obj):

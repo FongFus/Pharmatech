@@ -1,393 +1,481 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { View, Text, TextInput, Button, FlatList, StyleSheet, ActivityIndicator, Alert, TouchableOpacity } from 'react-native';
-import { Picker } from '@react-native-picker/picker';
-import { endpoints, authApis } from '../../configs/Apis';
+import {
+  View,
+  Text,
+  FlatList,
+  TouchableOpacity,
+  StyleSheet,
+  ActivityIndicator,
+  Alert,
+  Platform,
+  Modal,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { KeyboardAwareFlatList } from 'react-native-keyboard-aware-scroll-view';
+import { Button } from 'react-native-paper';
+import { StatusBar, setStatusBarStyle } from 'expo-status-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { endpoints, authApis } from '../../configs/Apis';
 import { MyUserContext } from '../../configs/MyContexts';
 
 const AdminDashboardScreen = () => {
-  const { user } = useContext(MyUserContext);
-  const [active_tab, setActiveTab] = useState('users');
-  const [users, setUsers] = useState([]);
   const [products, setProducts] = useState([]);
-  const [stats, setStats] = useState({ visits: 0 });
-  const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState(1);
-  const [page_size, setPageSize] = useState(10);
-  const [total_count, setTotalCount] = useState(0);
-  const [next_page, setNextPage] = useState(null);
-  const [previous_page, setPreviousPage] = useState(null);
-  const [search_query, setSearchQuery] = useState('');
-  const [ordering, setOrdering] = useState('created_at');
+  const [selectedProduct, setSelectedProduct] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [modalVisible, setModalVisible] = useState(false);
+  const [modalMessage, setModalMessage] = useState('');
+  const { user } = useContext(MyUserContext);
 
   useEffect(() => {
-    const fetchData = async () => {
-      if (!user || user.role !== 'admin') {
-        Alert.alert('Lỗi', 'Bạn không có quyền truy cập trang này.');
-        setLoading(false);
-        return;
-      }
-      const token = await AsyncStorage.getItem('token');
-      const authApi = authApis(token);
-      try {
-        let url = active_tab === 'users'
-          ? `${endpoints.usersList}?page=${page}&page_size=${page_size}`
-          : `${endpoints.productsList}?page=${page}&page_size=${page_size}`;
-        
-        if (search_query) {
-          url += `&search=${encodeURIComponent(search_query)}`;
-        }
-        if (ordering) {
-          url += `&ordering=${ordering}`;
-        }
+    // Set status bar style
+    setStatusBarStyle('light-content');
 
-        const response = await authApi.get(url);
-        if (active_tab === 'users') {
-          setUsers(response.results);
-        } else {
-          setProducts(response.results);
-        }
-        setTotalCount(response.count);
-        setNextPage(response.next);
-        setPreviousPage(response.previous);
+    // Check user role
+    if (user && user.role !== 'admin') {
+      showModal('Chỉ quản trị viên mới có thể truy cập màn hình này');
+      return;
+    }
 
-        // Fetch real statistics
-        const statsResponse = await authApi.get(endpoints.statistics);
-        setStats({ visits: statsResponse.total_interactions || 0 });
-      } catch (error) {
-        console.error('Fetch data error:', error.response?.data || error.message);
-        Alert.alert('Lỗi', error.response?.data?.detail || 'Không thể tải dữ liệu');
-      } finally {
-        setLoading(false);
-      }
+    fetchProducts();
+
+    // Cleanup function
+    return () => {
+      setStatusBarStyle('dark-content');
     };
-    fetchData();
-  }, [active_tab, page, page_size, search_query, ordering, user]);
+  }, [user]);
 
-  const handleApproveProduct = async (product_id) => {
+  const fetchProducts = async () => {
     setLoading(true);
-    const token = await AsyncStorage.getItem('token');
-    const authApi = authApis(token);
     try {
-      await authApi.post(endpoints.productsApprove(product_id));
-      // Refresh product list after approval
-      let url = `${endpoints.productsList}?page=${page}&page_size=${page_size}`;
-      if (search_query) {
-        url += `&search=${encodeURIComponent(search_query)}`;
-      }
-      if (ordering) {
-        url += `&ordering=${ordering}`;
-      }
-      const response = await authApi.get(url);
-      setProducts(response.results);
-      setTotalCount(response.count);
-      setNextPage(response.next);
-      setPreviousPage(response.previous);
-      Alert.alert('Thành công', 'Đã duyệt sản phẩm');
+      const token = await AsyncStorage.getItem('token');
+      const api = authApis(token);
+      const response = await api.get(endpoints.productsList);
+      setProducts(response.results || []); // Extract results array
     } catch (error) {
-      console.error('Approve product error:', error.response?.data || error.message);
-      Alert.alert('Lỗi', error.response?.data?.detail || 'Duyệt thất bại');
+      console.error('Fetch products error:', error);
+      showModal('Không thể tải danh sách sản phẩm');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleToggleUserActive = async (user_id, is_active) => {
-    setLoading(true);
-    const token = await AsyncStorage.getItem('token');
-    const authApi = authApis(token);
+  const fetchProductDetail = async (id) => {
+    setDetailLoading(true);
     try {
-      await authApi.post(endpoints.usersChangeActiveState, { user_id, is_active: !is_active });
-      setUsers(users.map(user =>
-        user.id === user_id ? { ...user, is_active: !is_active } : user
-      ));
-      Alert.alert('Thành công', `Đã ${is_active ? 'vô hiệu hóa' : 'kích hoạt'} người dùng`);
+      const token = await AsyncStorage.getItem('token');
+      const api = authApis(token);
+      const data = await api.get(endpoints.productsRead(id));
+      setSelectedProduct(data);
     } catch (error) {
-      console.error('Toggle user active error:', error.response?.data || error.message);
-      Alert.alert('Lỗi', error.response?.data?.detail || 'Cập nhật thất bại');
+      console.error('Fetch product detail error:', error);
+      try {
+        const errorData = JSON.parse(error.message);
+        showModal(errorData.detail || 'Không thể tải chi tiết sản phẩm');
+      } catch {
+        showModal('Không thể tải chi tiết sản phẩm');
+      }
     } finally {
-      setLoading(false);
+      setDetailLoading(false);
     }
   };
 
-  const renderUserItem = ({ item }) => (
-    <View style={styles.item}>
-      <Text style={styles.title}>{item.username}</Text>
-      <Text style={styles.detail}>Email: {item.email}</Text>
-      <Text style={[styles.status, { color: item.is_active ? 'green' : 'red' }]}>
-        Trạng thái: {item.is_active ? 'Hoạt động' : 'Vô hiệu hóa'}
-      </Text>
-      <Button
-        title={item.is_active ? 'Vô hiệu hóa' : 'Kích hoạt'}
-        onPress={() => handleToggleUserActive(item.id, item.is_active)}
-        color={item.is_active ? '#FF0000' : '#007AFF'}
-      />
-    </View>
-  );
+  const handleApprove = async (id) => {
+    try {
+      const token = await AsyncStorage.getItem('token');
+      const api = authApis(token);
+      await api.post(endpoints.productsApprove(id));
+      Alert.alert('Thành công', 'Sản phẩm đã được duyệt');
+      if (selectedProduct && selectedProduct.id === id) {
+        setSelectedProduct({ ...selectedProduct, is_approved: true });
+      }
+      fetchProducts();
+    } catch (error) {
+      console.error('Approve product error:', error);
+      try {
+        const errorData = JSON.parse(error.message);
+        showModal(errorData.detail || 'Không thể duyệt sản phẩm');
+      } catch {
+        showModal('Không thể duyệt sản phẩm');
+      }
+    }
+  };
+
+  const handleUnapprove = async (id) => {
+    Alert.alert('Xác nhận', 'Bạn có chắc muốn gỡ duyệt sản phẩm này?', [
+      { text: 'Hủy', style: 'cancel' },
+      {
+        text: 'Gỡ duyệt',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            const token = await AsyncStorage.getItem('token');
+            const api = authApis(token);
+            await api.post(endpoints.productsUnapprove(id));
+            Alert.alert('Thành công', 'Sản phẩm đã bị gỡ duyệt');
+            if (selectedProduct && selectedProduct.id === id) {
+              setSelectedProduct({ ...selectedProduct, is_approved: false });
+            }
+            fetchProducts();
+          } catch (error) {
+            console.error('Unapprove product error:', error);
+            try {
+              const errorData = JSON.parse(error.message);
+              showModal(errorData.detail || 'Không thể gỡ duyệt sản phẩm');
+            } catch {
+              showModal('Không thể gỡ duyệt sản phẩm');
+            }
+          }
+        },
+      },
+    ]);
+  };
+
+  const showModal = (message) => {
+    setModalMessage(message);
+    setModalVisible(true);
+  };
 
   const renderProductItem = ({ item }) => (
-    <View style={styles.item}>
-      <Text style={styles.title}>{item.name}</Text>
-      <Text style={styles.detail}>Giá: {item.price} VND</Text>
-      <Text style={[styles.status, { color: item.is_approved ? 'green' : '#FFD700' }]}>
-        Trạng thái: {item.is_approved ? 'Đã duyệt' : 'Chờ duyệt'}
-      </Text>
-      {!item.is_approved && (
-        <Button
-          title="Duyệt"
-          onPress={() => handleApproveProduct(item.id)}
-          color="#007AFF"
-        />
-      )}
-    </View>
+    <TouchableOpacity
+      style={styles.productItem}
+      onPress={() => fetchProductDetail(item.id)}
+    >
+      <View style={styles.productInfo}>
+        <Text style={styles.productName}>{item.name}</Text>
+        <View style={styles.statusContainer}>
+          <View
+            style={[
+              styles.statusDot,
+              { backgroundColor: item.is_approved ? '#4CAF50' : '#F44336' },
+            ]}
+          />
+          <Text style={styles.productStatus}>
+            {item.is_approved ? 'Đang bán' : 'Chưa duyệt'}
+          </Text>
+        </View>
+      </View>
+      <View style={styles.actionButtons}>
+        {!item.is_approved ? (
+          <TouchableOpacity
+            style={[styles.actionButton, styles.approveButton]}
+            onPress={() => handleApprove(item.id)}
+          >
+            <Text style={styles.actionButtonText}>Duyệt</Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            style={[styles.actionButton, styles.unapproveButton]}
+            onPress={() => handleUnapprove(item.id)}
+          >
+            <Text style={styles.actionButtonText}>Gỡ duyệt</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+    </TouchableOpacity>
   );
 
-  const totalPages = Math.ceil(total_count / page_size);
-  const pageNumbers = Array.from({ length: totalPages }, (_, i) => i + 1);
-
-  if (loading) {
-    return <ActivityIndicator size="large" color="#007AFF" />;
-  }
-
   return (
-    <View style={styles.container}>
-      <Text style={styles.header}>Bảng điều khiển</Text>
-      <Text style={styles.stats}>Tổng lượt truy cập: {stats.visits}</Text>
-      <View style={styles.tabContainer}>
-        <TouchableOpacity
-          style={[styles.tab, active_tab === 'users' && styles.activeTab]}
-          onPress={() => { setActiveTab('users'); setPage(1); setSearchQuery(''); }}
-        >
-          <Text style={[styles.tabText, active_tab === 'users' && styles.activeTabText]}>
-            Người dùng
+    <View style={{ backgroundColor: '#007AFF', flex: 1 }}>
+      <SafeAreaView style={styles.safeArea} edges={['left', 'right', 'bottom']}>
+        <StatusBar barStyle="light-content" />
+      <KeyboardAwareFlatList
+        data={products}
+        keyExtractor={(item) => item.id.toString()}
+        renderItem={renderProductItem}
+        ListHeaderComponent={
+          <Text style={styles.header}>Danh sách sản phẩm</Text>
+        }
+        ListEmptyComponent={
+          <Text style={styles.emptyListText}>
+            {loading ? 'Đang tải...' : 'Không có sản phẩm nào'}
           </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.tab, active_tab === 'products' && styles.activeTab]}
-          onPress={() => { setActiveTab('products'); setPage(1); setSearchQuery(''); }}
+        }
+        contentContainerStyle={styles.listContainer}
+        enableOnAndroid={true}
+        extraScrollHeight={100}
+      />
+      {selectedProduct && (
+        <Modal
+          visible={!!selectedProduct}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setSelectedProduct(null)}
         >
-          <Text style={[styles.tabText, active_tab === 'products' && styles.activeTabText]}>
-            Sản phẩm
-          </Text>
-        </TouchableOpacity>
-      </View>
-      {active_tab === 'users' && (
-        <View style={styles.searchContainer}>
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Tìm kiếm theo tên, email, số điện thoại..."
-            value={search_query}
-            onChangeText={text => { setSearchQuery(text); setPage(1); }}
-          />
-          <Picker
-            selectedValue={ordering}
-            style={styles.orderingPicker}
-            onValueChange={(value) => { setOrdering(value); setPage(1); }}
+          <TouchableOpacity
+            style={styles.modalOverlay}
+            activeOpacity={1}
+            onPressOut={() => setSelectedProduct(null)}
           >
-            <Picker.Item label="Sắp xếp theo ngày tạo" value="created_at" />
-            <Picker.Item label="Sắp xếp theo tên" value="username" />
-            <Picker.Item label="Sắp xếp ngược ngày tạo" value="-created_at" />
-            <Picker.Item label="Sắp xếp ngược tên" value="-username" />
-          </Picker>
-        </View>
+            <View style={styles.modalContent}>
+              <Text style={styles.modalHeader}>Chi tiết sản phẩm</Text>
+              {detailLoading ? (
+                <ActivityIndicator size="large" color="#007AFF" style={styles.loader} />
+              ) : (
+                <>
+                  <View style={styles.formGroup}>
+                    <Text style={styles.detailLabel}>Tên sản phẩm</Text>
+                    <Text style={styles.detailValue}>{selectedProduct.name}</Text>
+                  </View>
+                  <View style={styles.formGroup}>
+                    <Text style={styles.detailLabel}>Mô tả</Text>
+                    <Text style={styles.detailValue}>{selectedProduct.description}</Text>
+                  </View>
+                  <View style={styles.formGroup}>
+                    <Text style={styles.detailLabel}>Giá</Text>
+                    <Text style={styles.detailValue}>
+                      {parseFloat(selectedProduct.price).toLocaleString('vi-VN')} VND
+                    </Text>
+                  </View>
+                  <View style={styles.formGroup}>
+                    <Text style={styles.detailLabel}>Nhà cung cấp</Text>
+                    <Text style={styles.detailValue}>
+                      {selectedProduct.distributor?.full_name || 'N/A'}
+                    </Text>
+                  </View>
+                  <View style={styles.formGroup}>
+                    <Text style={styles.detailLabel}>Phân loại</Text>
+                    <Text style={styles.detailValue}>
+                      {selectedProduct.category?.name || 'N/A'}
+                    </Text>
+                  </View>
+                  <View style={styles.formGroup}>
+                    <Text style={styles.detailLabel}>Tình trạng</Text>
+                    <View style={styles.statusContainer}>
+                      <View
+                        style={[
+                          styles.statusDot,
+                          { backgroundColor: selectedProduct.is_approved ? '#4CAF50' : '#F44336' },
+                        ]}
+                      />
+                      <Text style={styles.statusText}>
+                        {selectedProduct.is_approved ? 'Đang bán' : 'Chưa duyệt'}
+                      </Text>
+                    </View>
+                  </View>
+                  <View style={styles.detailActions}>
+                    {!selectedProduct.is_approved ? (
+                      <TouchableOpacity
+                        style={[styles.button, styles.approveButton]}
+                        onPress={() => handleApprove(selectedProduct.id)}
+                      >
+                        <Text style={styles.buttonText}>Duyệt</Text>
+                      </TouchableOpacity>
+                    ) : (
+                      <TouchableOpacity
+                        style={[styles.button, styles.unapproveButton]}
+                        onPress={() => handleUnapprove(selectedProduct.id)}
+                      >
+                        <Text style={styles.buttonText}>Gỡ duyệt</Text>
+                      </TouchableOpacity>
+                    )}
+                    <TouchableOpacity
+                      style={[styles.button, styles.closeButton]}
+                      onPress={() => setSelectedProduct(null)}
+                    >
+                      <Text style={styles.buttonText}>Đóng</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
+            </View>
+          </TouchableOpacity>
+        </Modal>
       )}
-      <View style={styles.pageSizeContainer}>
-        <Text style={styles.pageSizeText}>Số bản ghi mỗi trang:</Text>
-        <Picker
-          selectedValue={page_size}
-          style={styles.pageSizePicker}
-          onValueChange={(value) => { setPageSize(value); setPage(1); }}
+      <Modal
+        visible={modalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setModalVisible(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPressOut={() => setModalVisible(false)}
         >
-          <Picker.Item label="10" value={10} />
-          <Picker.Item label="20" value={20} />
-          <Picker.Item label="50" value={50} />
-          <Picker.Item label="100" value={100} />
-        </Picker>
-      </View>
-      {active_tab === 'users' ? (
-        <FlatList
-          data={users}
-          renderItem={renderUserItem}
-          keyExtractor={item => item.id.toString()}
-          ListEmptyComponent={<Text style={styles.warning}>Không có người dùng</Text>}
-        />
-      ) : (
-        <FlatList
-          data={products}
-          renderItem={renderProductItem}
-          keyExtractor={item => item.id.toString()}
-          ListEmptyComponent={<Text style={styles.warning}>Không có sản phẩm</Text>}
-        />
-      )}
-      <View style={styles.pagination}>
-        <Button
-          title="Trang trước"
-          onPress={() => setPage(page > 1 ? page - 1 : 1)}
-          disabled={!previous_page}
-          color="#007AFF"
-        />
-        <View style={styles.pageNumbers}>
-          {pageNumbers.map(num => (
+          <View style={styles.modalContent}>
+            <Text style={styles.modalText}>{modalMessage}</Text>
             <TouchableOpacity
-              key={num}
-              style={[styles.pageNumber, page === num && styles.activePageNumber]}
-              onPress={() => setPage(num)}
+              style={styles.modalButton}
+              onPress={() => setModalVisible(false)}
             >
-              <Text style={[styles.pageNumberText, page === num && styles.activePageNumberText]}>
-                {num}
-              </Text>
+              <Text style={styles.modalButtonText}>Đóng</Text>
             </TouchableOpacity>
-          ))}
-        </View>
-        <Button
-          title="Trang sau"
-          onPress={() => setPage(page + 1)}
-          disabled={!next_page}
-          color="#007AFF"
-        />
-        <Button
-          title="Cuối cùng"
-          onPress={() => setPage(totalPages)}
-          disabled={!next_page}
-          color="#007AFF"
-        />
-      </View>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+    </SafeAreaView>
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
+  safeArea: {
     flex: 1,
     backgroundColor: '#FFFFFF',
+  },
+  listContainer: {
     padding: 16,
+    flexGrow: 1,
   },
   header: {
     fontSize: 24,
-    fontFamily: 'Roboto',
     fontWeight: '700',
     color: '#007AFF',
     marginBottom: 16,
-  },
-  stats: {
-    fontSize: 16,
-    fontFamily: 'Roboto',
-    fontWeight: '400',
-    marginBottom: 16,
-  },
-  tabContainer: {
-    flexDirection: 'row',
-    marginBottom: 16,
-  },
-  tab: {
-    flex: 1,
-    padding: 10,
-    backgroundColor: '#E0E0E0',
-    alignItems: 'center',
-    borderRadius: 5,
-    marginHorizontal: 5,
-  },
-  activeTab: {
-    backgroundColor: '#007AFF',
-  },
-  tabText: {
-    fontSize: 16,
-    fontFamily: 'Roboto',
-    fontWeight: '700',
-    color: '#000000',
-  },
-  activeTabText: {
-    color: '#FFFFFF',
-  },
-  searchContainer: {
-    marginBottom: 16,
-  },
-  searchInput: {
-    height: 40,
-    borderColor: 'gray',
-    borderWidth: 1,
-    marginBottom: 8,
-    paddingHorizontal: 10,
-    fontFamily: 'Roboto',
-    fontWeight: '400',
-  },
-  orderingPicker: {
-    height: 40,
-    width: '100%',
-  },
-  pageSizeContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  pageSizeText: {
-    fontSize: 16,
-    fontFamily: 'Roboto',
-    fontWeight: '400',
-    marginRight: 8,
-  },
-  pageSizePicker: {
-    height: 40,
-    width: 100,
-  },
-  item: {
-    padding: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: 'gray',
-    marginBottom: 12,
-  },
-  title: {
-    fontSize: 18,
-    fontFamily: 'Roboto',
-    fontWeight: '700',
-  },
-  detail: {
-    fontSize: 16,
-    fontFamily: 'Roboto',
-    fontWeight: '400',
-  },
-  status: {
-    fontSize: 16,
-    fontFamily: 'Roboto-Italic',
-    fontWeight: '400',
-    marginVertical: 8,
-  },
-  warning: {
-    fontSize: 16,
-    fontFamily: 'Roboto-Italic',
-    fontWeight: '400',
-    color: 'red',
     textAlign: 'center',
-    marginTop: 20,
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
   },
-  pagination: {
+  productItem: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: 16,
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    marginBottom: 8,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
   },
-  pageNumbers: {
+  productInfo: {
+    flex: 1,
+  },
+  productName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
+    marginBottom: 4,
+  },
+  statusContainer: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'center',
+    alignItems: 'center',
   },
-  pageNumber: {
-    padding: 8,
-    marginHorizontal: 4,
-    backgroundColor: '#E0E0E0',
+  statusDot: {
+    width: 10,
+    height: 10,
     borderRadius: 5,
+    marginRight: 8,
   },
-  activePageNumber: {
+  productStatus: {
+    fontSize: 12,
+    color: '#007AFF',
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
+  },
+  statusText: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#333',
+  },
+  actionButtons: {
+    flexDirection: 'row',
+  },
+  actionButton: {
+    padding: 8,
+    borderRadius: 4,
+    minWidth: 70,
+    alignItems: 'center',
+  },
+  approveButton: {
     backgroundColor: '#007AFF',
   },
-  pageNumberText: {
-    fontSize: 14,
-    fontFamily: 'Roboto',
-    fontWeight: '400',
-    color: '#000000',
+  unapproveButton: {
+    backgroundColor: '#FF6B35',
   },
-  activePageNumberText: {
-    color: '#FFFFFF',
+  actionButtonText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 20,
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+  },
+  modalHeader: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#007AFF',
+    marginBottom: 16,
+    textAlign: 'center',
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
+  },
+  modalText: {
+    fontSize: 16,
+    marginBottom: 20,
+    color: '#333',
+    textAlign: 'center',
+  },
+  modalButton: {
+    backgroundColor: '#007AFF',
+    padding: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  modalButtonText: {
+    color: 'white',
+    fontWeight: '600',
+    fontSize: 16,
+  },
+  formGroup: {
+    marginBottom: 16,
+  },
+  detailLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 8,
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
+  },
+  detailValue: {
+    fontSize: 16,
+    color: '#333',
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
+  },
+  detailActions: {
+    marginTop: 16,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  button: {
+    padding: 15,
+    borderRadius: 8,
+    alignItems: 'center',
+    minWidth: 100,
+  },
+  closeButton: {
+    backgroundColor: '#6c757d',
+  },
+  buttonText: {
+    color: 'white',
+    fontWeight: '600',
+    fontSize: 16,
+  },
+  emptyListText: {
+    fontSize: 16,
+    color: '#999',
+    textAlign: 'center',
+    padding: 20,
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
+  },
+  loader: {
+    marginVertical: 20,
   },
 });
 

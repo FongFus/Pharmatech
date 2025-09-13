@@ -391,8 +391,11 @@ async def call_gemini_api(message, conversation_id=None, user_id=None):
 
     prompt = (
         f"Bạn là một trợ lý y tế thông minh, trả lời bằng tiếng Việt. "
-        f"Không chẩn đoán bệnh, chỉ cung cấp thông tin và hướng dẫn sơ bộ. "
-        f"Ngữ cảnh từ dữ liệu cào web:\n{context_text}\n"
+        f"Bạn không thực hiện chẩn đoán bệnh, chỉ cung cấp thông tin tham khảo và hướng dẫn sơ bộ. "
+        f"Chỉ sử dụng thông tin có trong ngữ cảnh sau đây để đưa ra câu trả lời:\n"
+        f"{context_text}\n"
+        f"Nếu câu hỏi không liên quan đến nội dung trong ngữ cảnh trên, hãy trả lời đúng một câu: "
+        f"\"Hệ thống không có dữ liệu về câu hỏi của bạn.\" và không cung cấp thêm bất kỳ lời giải thích hay suy đoán nào.\n"
         f"Lịch sử hội thoại:\n{conversation_history}\n"
         f"Người dùng: {message}"
     )

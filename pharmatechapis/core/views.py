@@ -360,8 +360,13 @@ class ProductViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIV
 
     def get_queryset(self):
         user = self.request.user
-        if self.action in ['list', 'retrieve'] and not user.is_authenticated:
-            return Product.objects.filter(is_approved=True)
+        if self.action in ['list', 'retrieve']:
+            if not user.is_authenticated:
+                return Product.objects.filter(is_approved=True)
+            elif user.role == 'admin':
+                return Product.objects.all()
+            else:
+                return Product.objects.filter(is_approved=True)
         if self.action == 'my_products':
             return Product.objects.filter(distributor=user)
         if self.action in ['approve', 'update', 'partial_update', 'destroy']:
@@ -375,9 +380,9 @@ class ProductViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIV
             return [permissions.AllowAny()]
         elif self.action in ['create', 'my_products']:
             return [IsDistributor()]
-        elif self.action in ['update', 'partial_update', 'destroy', 'unapprove']:
+        elif self.action in ['update', 'partial_update', 'destroy']:
             return [IsDistributor(), IsProductOwner()]
-        elif self.action in ['approve', 'review']:
+        elif self.action in ['approve', 'review', 'unapprove']:
             return [IsAdmin()]
         return [permissions.IsAuthenticated()]
 
