@@ -8,6 +8,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
 from django.utils.http import urlsafe_base64_decode
 from django.utils.encoding import force_str
+from asgiref.sync import async_to_sync
 
 # Serializer cho User
 class UserSerializer(ModelSerializer):
@@ -33,7 +34,7 @@ class UserSerializer(ModelSerializer):
             avatar=avatar
         )
         from .utils import create_firebase_user
-        firebase_user = create_firebase_user(user.email, password, str(user.id), user.role)
+        firebase_user = async_to_sync(create_firebase_user)(user.email, password, str(user.id), user.role)
         if not firebase_user.get('success'):
             raise serializers.ValidationError(firebase_user['message'])
         return user

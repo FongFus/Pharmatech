@@ -20,6 +20,7 @@ import chromadb
 from llama_index.core import VectorStoreIndex, Document, StorageContext
 from llama_index.vector_stores.chroma import ChromaVectorStore
 from llama_index.embeddings.gemini import GeminiEmbedding
+from llama_index.llms.gemini import Gemini
 from llama_index.core import Settings
 import logging
 import time
@@ -119,7 +120,7 @@ def get_messages_from_firebase(conversation_id, user_id, limit=50):
         raise Exception(f"Lỗi khi lấy tin nhắn từ Firebase: {str(e)}")
 
 def extract_main_guidance(response_text):
-    if not response_text:
+    if not response_text or not response_text.strip():
         return "Vui lòng cung cấp thêm thông tin để được hỗ trợ tốt hơn."
     keywords = ["**Trả lời:**", "Response (Vietnamese):", "Lời khuyên sơ bộ:"]
     for kw in keywords:
@@ -132,13 +133,14 @@ def extract_main_guidance(response_text):
                 sentences = guidance.split('.')
                 if len(sentences) > 3:
                     guidance = '.'.join(sentences[:3]) + '.'
-                return guidance
+                return guidance if guidance else response_text
     sentences = response_text.split('.')
     if len(sentences) > 3:
         guidance = '.'.join(sentences[:3]) + '.'
     else:
         guidance = response_text
-    if not guidance.endswith('.'):
+    # Chỉ fallback nếu guidance thực sự rỗng
+    if not guidance or not guidance.strip():
         return "Vui lòng cung cấp thêm thông tin để được hỗ trợ tốt hơn."
     return guidance
 
@@ -358,10 +360,12 @@ async def call_gemini_api(message, conversation_id=None, user_id=None):
     if len(message) > 1000:
         raise ValueError("Tin nhắn quá dài, tối đa 1000 ký tự.")
 
-    GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent'
-    headers = {'Content-Type': 'application/json'}
-    
-    # Lấy lịch sử hội thoại từ Firebase
+    try:
+        gemini_llm = Gemini(api_key=settings.GEMINI_API_KEY, model_name="models/gemini-2.0-flash")
+    except Exception as e:
+        logger.error(f"Lỗi khi khởi tạo Gemini LLM: {str(e)}")
+        return {'success': False, 'error': f"Lỗi khi khởi tạo Gemini LLM: {str(e)}"}
+
     previous_messages = []
     if conversation_id and user_id:
         try:
@@ -369,7 +373,7 @@ async def call_gemini_api(message, conversation_id=None, user_id=None):
             previous_messages = messages[-4:]
         except Exception:
             previous_messages = []
-    
+
     conversation_history = ""
     total_history_length = 0
     for msg in previous_messages:
@@ -378,13 +382,13 @@ async def call_gemini_api(message, conversation_id=None, user_id=None):
             role = "Người dùng" if msg['message_type'] == 'user' else "Trợ lý"
             conversation_history += f"{role}: {msg_text}\n"
             total_history_length += len(msg_text)
-    
+
     # Lấy ngữ cảnh từ ChromaDB
     index, _ = initialize_vector_store()
-    query_engine = index.as_query_engine()
-    context = await asyncio.to_thread(query_engine.query, message)
-    context_text = str(context)[:4000]
-    
+    retriever = index.as_retriever(similarity_top_k=2)
+    nodes = await asyncio.to_thread(retriever.retrieve, message)
+    context_text = "\n".join([node.node.text for node in nodes])[:4000]
+
     prompt = (
         f"Bạn là một trợ lý y tế thông minh, trả lời bằng tiếng Việt. "
         f"Không chẩn đoán bệnh, chỉ cung cấp thông tin và hướng dẫn sơ bộ. "
@@ -392,33 +396,19 @@ async def call_gemini_api(message, conversation_id=None, user_id=None):
         f"Lịch sử hội thoại:\n{conversation_history}\n"
         f"Người dùng: {message}"
     )
-    
-    data = {
-        'contents': [{'parts': [{'text': prompt}]}],
-        'generationConfig': {'maxOutputTokens': 150, 'temperature': 0.7}
-    }
-    
+
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f'{GEMINI_API_URL}?key={settings.GEMINI_API_KEY}',
-                headers=headers,
-                json=data
-            ) as response:
-                response.raise_for_status()
-                result = await response.json()
-                if 'candidates' not in result or not result['candidates']:
-                    raise ValueError("Không nhận được phản hồi hợp lệ từ Gemini API.")
-                response_text = result['candidates'][0]['content']['parts'][0]['text'][:1000]
-                
-                return {
-                    'success': True,
-                    'response': response_text,
-                    'context': context_text
-                }
-    except aiohttp.ClientError as e:
-        logger.error(f"Lỗi khi gọi Gemini API: {str(e)}")
-        return {'success': False, 'error': str(e)}
-    except KeyError as e:
-        logger.error(f"Định dạng phản hồi Gemini API không đúng: {str(e)}")
+        response = await asyncio.to_thread(gemini_llm.complete, prompt)
+        response_text = response.text[:1000] if response and hasattr(response, 'text') else ""
+        logger.debug(f"Gemini response: {response_text}")
+        if not response_text or not response_text.strip():
+            logger.warning("Gemini LLM trả về response rỗng hoặc không hợp lệ, fallback.")
+            response_text = "Vui lòng cung cấp thêm thông tin để được hỗ trợ tốt hơn."
+        return {
+            'success': True,
+            'response': response_text,
+            'context': context_text
+        }
+    except Exception as e:
+        logger.error(f"Lỗi khi gọi Gemini LLM complete: {str(e)}")
         return {'success': False, 'error': str(e)}

@@ -6,6 +6,7 @@ from decouple import config
 from celery.schedules import crontab
 from llama_index.core import Settings
 from llama_index.embeddings.gemini import GeminiEmbedding
+from llama_index.llms.gemini import Gemini
 import logging
 
 logger = logging.getLogger(__name__)
@@ -341,6 +342,7 @@ LOGGING = {
         'file': {
             'class': 'logging.FileHandler',
             'filename': os.path.join(BASE_DIR, 'debug.log'),
+            'encoding': 'utf-8',
         },
     },
     'root': {

@@ -1,7 +1,7 @@
 import json
 import uuid
 from channels.generic.websocket import AsyncWebsocketConsumer
-from .utils import call_gemini_api, save_message_to_firebase, send_fcm_v1, get_messages_from_firebase, extract_main_guidance
+from .utils import call_gemini_api, save_message_to_firebase, get_messages_from_firebase, extract_main_guidance
 from oauth2_provider.models import AccessToken
 from asgiref.sync import sync_to_async
 from firebase_admin import exceptions as firebase_exceptions
@@ -131,10 +131,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'message': message,
                 'response': main_guidance
             }))
-            # Gửi thông báo FCM
-            fcm_result = await send_fcm_v1(self.user, "Phản hồi chatbot", main_guidance)
-            if not fcm_result['success']:
-                logger.error(f"Lỗi gửi FCM: {fcm_result['message']}")
+            # FCM đã bị vô hiệu hóa cho tính năng chat để tránh lỗi token thiết bị
+            # fcm_result = await send_fcm_v1(self.user, "Phản hồi chatbot", main_guidance)
+            # if not fcm_result['success']:
+            #     logger.error(f"Lỗi gửi FCM: {fcm_result['message']}")
         except AiohttpClientError as e:
             logger.error(f"Lỗi kết nối Gemini API: {str(e)}")
             await self.send(text_data=json.dumps({'error': f"Lỗi kết nối Gemini API: {str(e)}"}))
