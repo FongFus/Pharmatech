@@ -112,6 +112,36 @@ def system_statistics(request):
         'unread_notification_count': unread_notification_count,
     })
 
+# Distributor Revenue Statistics
+@api_view(['GET'])
+@permission_classes([IsDistributor])
+def distributor_revenue_statistics(request):
+    # Tính tổng doanh thu từ các đơn hàng đã hoàn thành của nhà phân phối
+    total_revenue = OrderItem.objects.filter(
+        product__distributor=request.user,
+        order__status='completed'
+    ).aggregate(total=Sum('price'))['total'] or 0
+
+    # Tính tổng số đơn hàng đã hoàn thành
+    total_orders = Order.objects.filter(
+        items__product__distributor=request.user,
+        status='completed'
+    ).distinct().count()
+
+    # Lấy danh sách sản phẩm bán chạy nhất (top 5)
+    trending_products = OrderItem.objects.filter(
+        product__distributor=request.user,
+        order__status='completed'
+    ).values('product__name').annotate(
+        total_sold=Sum('quantity')
+    ).order_by('-total_sold')[:5]
+
+    return Response({
+        'total_revenue': str(total_revenue),
+        'total_orders': total_orders,
+        'trending_products': list(trending_products),
+    })
+
 # User ViewSet
 class UserViewSet(viewsets.ViewSet, generics.CreateAPIView, generics.ListAPIView):
     authentication_classes = [CustomOAuth2Authentication]
@@ -330,8 +360,13 @@ class ProductViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIV
 
     def get_queryset(self):
         user = self.request.user
-        if self.action in ['list', 'retrieve'] and not user.is_authenticated:
-            return Product.objects.filter(is_approved=True)
+        if self.action in ['list', 'retrieve']:
+            if not user.is_authenticated:
+                return Product.objects.filter(is_approved=True)
+            elif user.role == 'admin':
+                return Product.objects.all()
+            else:
+                return Product.objects.filter(is_approved=True)
         if self.action == 'my_products':
             return Product.objects.filter(distributor=user)
         if self.action in ['approve', 'update', 'partial_update', 'destroy']:
@@ -347,7 +382,7 @@ class ProductViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIV
             return [IsDistributor()]
         elif self.action in ['update', 'partial_update', 'destroy']:
             return [IsDistributor(), IsProductOwner()]
-        elif self.action in ['approve', 'review']:
+        elif self.action in ['approve', 'review', 'unapprove']:
             return [IsAdmin()]
         return [permissions.IsAuthenticated()]
 
@@ -358,6 +393,14 @@ class ProductViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIV
         product.save()
         # notify_product_approval.delay(product.id)
         return Response({"message": "Trạng thái duyệt sản phẩm đã được cập nhật."})
+
+    @action(detail=True, methods=['post'], url_path='unapprove')
+    def unapprove(self, request, pk=None):
+        product = self.get_object()
+        product.is_approved = False
+        product.save()
+        # notify_product_approval.delay(product.id)
+        return Response({"message": "Sản phẩm đã bị vô hiệu"})
 
     @action(detail=False, methods=['get'], url_path='review')
     def review(self, request):
@@ -672,18 +715,18 @@ class CategoryViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.Upd
         return [IsCategoryManager()]
 
 # Inventory ViewSet
-class InventoryViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.UpdateAPIView, generics.DestroyAPIView):
+class InventoryViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.RetrieveAPIView, generics.UpdateAPIView, generics.DestroyAPIView):
     authentication_classes = [CustomOAuth2Authentication]
     queryset = Inventory.objects.all()
     serializer_class = InventorySerializer
     permission_classes = [IsDistributor, IsInventoryManager]
     pagination_class = ItemPaginator
     filter_backends = [SearchFilter]
-    search_fields = ['product_name']
+    search_fields = ['product__name']
 
     def get_queryset(self):
         if self.request.user.is_authenticated:
-            return self.queryset.filter(distributor=self.request.user)
+            return self.queryset.filter(distributor=self.request.user).select_related('product')
         return self.queryset.none()
 
     def create(self, request, *args, **kwargs):
@@ -691,6 +734,75 @@ class InventoryViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.Up
         serializer.is_valid(raise_exception=True)
         serializer.save(distributor=request.user)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['post'], url_path='bulk-create')
+    def bulk_create(self, request):
+        """Bulk create inventory items"""
+        items_data = request.data
+        if not isinstance(items_data, list):
+            return Response({'error': 'Expected a list of inventory items'}, status=status.HTTP_400_BAD_REQUEST)
+
+        created_items = []
+        errors = []
+
+        for i, item_data in enumerate(items_data):
+            serializer = self.get_serializer(data=item_data, context={'request': request})
+            if serializer.is_valid():
+                try:
+                    inventory_item = serializer.save(distributor=request.user)
+                    created_items.append(serializer.data)
+                except Exception as e:
+                    errors.append({'index': i, 'error': str(e), 'data': item_data})
+            else:
+                errors.append({'index': i, 'error': serializer.errors, 'data': item_data})
+
+        response_data = {
+            'created_count': len(created_items),
+            'error_count': len(errors),
+            'created_items': created_items,
+            'errors': errors
+        }
+
+        if errors:
+            return Response(response_data, status=status.HTTP_207_MULTI_STATUS)
+        return Response(response_data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['delete'], url_path='bulk-delete')
+    def bulk_delete(self, request):
+        """Bulk delete inventory items"""
+        ids = request.data.get('ids', [])
+        if not ids:
+            return Response({'error': 'No IDs provided'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Filter items that belong to the current user
+        user_inventory = self.get_queryset()
+        items_to_delete = user_inventory.filter(id__in=ids)
+
+        deleted_count = items_to_delete.count()
+        items_to_delete.delete()
+
+        return Response({
+            'message': f'Successfully deleted {deleted_count} inventory items',
+            'deleted_count': deleted_count
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'], url_path='low-stock')
+    def low_stock(self, request):
+        """Get inventory items with low stock (quantity < threshold)"""
+        threshold = request.query_params.get('threshold', 10)
+        try:
+            threshold = int(threshold)
+        except ValueError:
+            threshold = 10
+
+        queryset = self.get_queryset().filter(quantity__lt=threshold)
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
 
 # Discount ViewSet
 class DiscountViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.UpdateAPIView, generics.DestroyAPIView, generics.RetrieveAPIView):
@@ -822,7 +934,7 @@ class ReviewViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.Retri
     def get_queryset(self):
         if self.request.user.is_authenticated:
             user = self.request.user
-            if self.action in ['list', 'retrieve']:
+            if self.action in ['list', 'retrieve', 'product_reviews']:
                 return Review.objects.all()
             elif user.role == 'customer':
                 return Review.objects.filter(user=user)
@@ -837,6 +949,55 @@ class ReviewViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.Retri
         serializer.is_valid(raise_exception=True)
         serializer.save(user=request.user)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['get'], url_path='my-reviews', permission_classes=[IsDistributor])
+    def my_reviews(self, request):
+        """
+        Lấy danh sách review của các sản phẩm do nhà phân phối sở hữu.
+        """
+        queryset = Review.objects.filter(product__distributor=request.user)
+        queryset = self.filter_queryset(queryset)
+
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get', 'post'], url_path='product/(?P<product_id>\d+)/reviews')
+    def product_reviews(self, request, product_id=None):
+        """
+        Lấy danh sách review của một sản phẩm dựa trên product_id hoặc tạo review mới cho sản phẩm đó.
+        Hỗ trợ phân trang, lọc theo rating và sắp xếp theo created_at hoặc rating.
+        """
+        # Kiểm tra sản phẩm tồn tại
+        product = get_object_or_404(Product, id=product_id, is_approved=True)
+
+        if request.method == 'GET':
+            # Lấy queryset review cho sản phẩm
+            queryset = self.get_queryset().filter(product=product)
+            queryset = self.filter_queryset(queryset)
+
+            # Phân trang
+            page = self.paginate_queryset(queryset)
+            if page is not None:
+                serializer = self.get_serializer(page, many=True)
+                return self.get_paginated_response(serializer.data)
+
+            # Serialize dữ liệu nếu không phân trang
+            serializer = self.get_serializer(queryset, many=True)
+            return Response(serializer.data)
+
+        elif request.method == 'POST':
+            # Tạo review mới cho sản phẩm
+            data = request.data.copy()
+            data['product'] = product_id  # Set product from URL
+            serializer = self.get_serializer(data=data, context={'request': request})
+            serializer.is_valid(raise_exception=True)
+            serializer.save(user=request.user)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 # ReviewReply ViewSet
 class ReviewReplyViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.RetrieveAPIView, generics.UpdateAPIView, generics.DestroyAPIView):

@@ -8,6 +8,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
 from django.utils.http import urlsafe_base64_decode
 from django.utils.encoding import force_str
+from asgiref.sync import async_to_sync
 
 # Serializer cho User
 class UserSerializer(ModelSerializer):
@@ -33,7 +34,7 @@ class UserSerializer(ModelSerializer):
             avatar=avatar
         )
         from .utils import create_firebase_user
-        firebase_user = create_firebase_user(user.email, password, str(user.id), user.role)
+        firebase_user = async_to_sync(create_firebase_user)(user.email, password, str(user.id), user.role)
         if not firebase_user.get('success'):
             raise serializers.ValidationError(firebase_user['message'])
         return user
@@ -81,9 +82,11 @@ class UserDetailSerializer(ModelSerializer):
 # Serializer cho Product
 class ProductSerializer(ModelSerializer):
     total_stock = serializers.SerializerMethodField()
+    distributor_name = serializers.CharField(source='distributor.full_name', read_only=True)
+    category_name = serializers.CharField(source='category.name', read_only=True, allow_null=True)
     class Meta:
         model = Product
-        fields = ['id', 'distributor', 'name', 'description', 'category', 'price', 'total_stock', 'image', 'is_approved', 'created_at', 'updated_at']
+        fields = ['id', 'distributor', 'distributor_name', 'name', 'description', 'category', 'category_name', 'price', 'total_stock', 'image', 'is_approved', 'created_at', 'updated_at']
         read_only_fields = ['id', 'distributor', 'created_at', 'updated_at', 'is_approved']
 
     def get_total_stock(self, obj):
@@ -383,15 +386,48 @@ class NotificationSerializer(ModelSerializer):
             instance.is_read = True
         return super().update(instance, validated_data)
 
+class ReviewReplySerializer(ModelSerializer):
+    review_id = serializers.SerializerMethodField()
+    product_name = serializers.SerializerMethodField()
+    user_details = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ReviewReply
+        fields = ['review', 'user', 'comment', 'created_at', 'updated_at', 'review_id', 'product_name', 'user_details']
+        read_only_fields = ['user', 'created_at', 'updated_at']
+
+    def validate(self, data):
+        user = self.context['request'].user
+        review = data.get('review')
+        if review.product.distributor != user and user.role != 'admin':
+            raise serializers.ValidationError("Chỉ admin hoặc nhà phân phối của sản phẩm mới có thể trả lời đánh giá.")
+        return data
+
+    def get_review_id(self, obj):
+        return obj.review.id
+
+    def get_product_name(self, obj):
+        return obj.review.product.name
+
+    def get_user_details(self, obj):
+        return {
+            'id': obj.user.id,
+            'username': obj.user.username,
+            'full_name': obj.user.full_name,
+        }
+
 class ReviewSerializer(ModelSerializer):
     product_name = serializers.SerializerMethodField()
     order_code = serializers.SerializerMethodField()
-    product_id = serializers.PrimaryKeyRelatedField(queryset=Product.objects.filter(is_approved=True), source='product', write_only=True)
+    user_details = serializers.SerializerMethodField()
+    replies = ReviewReplySerializer(many=True, read_only=True)
+    product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.filter(is_approved=True), write_only=True)
+    order = serializers.PrimaryKeyRelatedField(queryset=Order.objects.all(), required=False, allow_null=True)
 
     class Meta:
         model = Review
-        fields = ['id', 'user', 'product', 'order', 'rating', 'comment', 'created_at', 'updated_at', 'product_name', 'order_code', 'product_id']
-        read_only_fields = ['id', 'user', 'created_at', 'updated_at', 'product_name', 'order_code']
+        fields = ['id', 'user', 'product', 'order', 'rating', 'comment', 'created_at', 'updated_at', 'product_name', 'order_code', 'user_details', 'replies']
+        read_only_fields = ['id', 'user', 'created_at', 'updated_at', 'product_name', 'order_code', 'user_details', 'replies']
 
     def validate(self, data):
         user = self.context['request'].user
@@ -414,27 +450,12 @@ class ReviewSerializer(ModelSerializer):
     def get_order_code(self, obj):
         return obj.order.order_code if obj.order else None
 
-class ReviewReplySerializer(ModelSerializer):
-    review_id = serializers.SerializerMethodField()
-    product_name = serializers.SerializerMethodField()
-
-    class Meta:
-        model = ReviewReply
-        fields = ['review', 'user', 'comment', 'created_at', 'updated_at', 'review_id', 'product_name']
-        read_only_fields = ['user', 'created_at', 'updated_at']
-
-    def validate(self, data):
-        user = self.context['request'].user
-        review = data.get('review')
-        if review.product.distributor != user and user.role != 'admin':
-            raise serializers.ValidationError("Chỉ admin hoặc nhà phân phối của sản phẩm mới có thể trả lời đánh giá.")
-        return data
-
-    def get_review_id(self, obj):
-        return obj.review.id
-
-    def get_product_name(self, obj):
-        return obj.review.product.name
+    def get_user_details(self, obj):
+        return {
+            'id': obj.user.id,
+            'username': obj.user.username,
+            'full_name': obj.user.full_name,
+        }
 
 # Serializer cho Category
 class CategorySerializer(ModelSerializer):

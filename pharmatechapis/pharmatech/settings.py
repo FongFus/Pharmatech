@@ -3,6 +3,13 @@ import os
 import pymysql
 import cloudinary
 from decouple import config
+from celery.schedules import crontab
+from llama_index.core import Settings
+from llama_index.embeddings.gemini import GeminiEmbedding
+from llama_index.llms.gemini import Gemini
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -34,6 +41,7 @@ INSTALLED_APPS = [
     'cloudinary_storage',
     'cloudinary',
     'channels',
+    'django_celery_beat',
 ]
 
 MIDDLEWARE = [
@@ -293,6 +301,37 @@ STATICFILES_DIRS = [os.path.join(BASE_DIR, 'static')]
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+# LOGGING = {
+#     'version': 1,
+#     'disable_existing_loggers': False,
+#     'handlers': {
+#         'console': {
+#             'class': 'logging.StreamHandler',
+#         },
+#     },
+#     'root': {
+#         'handlers': ['console'],
+#         'level': 'INFO',
+#     },
+#     'loggers': {
+#         'core': {
+#             'handlers': ['console'],
+#             'level': 'INFO',
+#             'propagate': False,
+#         },
+#         'django': {
+#             'handlers': ['console'],
+#             'level': 'INFO',
+#             'propagate': False,
+#         },
+#         'oauth2_provider': {
+#             'handlers': ['console'],
+#             'level': 'DEBUG',
+#             'propagate': False,
+#         },
+#     },
+# }
+
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
@@ -300,26 +339,52 @@ LOGGING = {
         'console': {
             'class': 'logging.StreamHandler',
         },
+        'file': {
+            'class': 'logging.FileHandler',
+            'filename': os.path.join(BASE_DIR, 'debug.log'),
+            'encoding': 'utf-8',
+        },
     },
     'root': {
-        'handlers': ['console'],
-        'level': 'INFO',
+        'handlers': ['console', 'file'],
+        'level': 'DEBUG',
     },
     'loggers': {
         'core': {
-            'handlers': ['console'],
-            'level': 'INFO',
+            'handlers': ['console', 'file'],
+            'level': 'DEBUG',
             'propagate': False,
         },
         'django': {
-            'handlers': ['console'],
+            'handlers': ['console', 'file'],
             'level': 'INFO',
             'propagate': False,
         },
         'oauth2_provider': {
-            'handlers': ['console'],
+            'handlers': ['console', 'file'],
             'level': 'DEBUG',
             'propagate': False,
         },
     },
 }
+
+CELERY_BEAT_SCHEDULE = {
+    'scrape-healthcare-data': {
+        'task': 'core.tasks.scrape_and_store_websites',
+        'schedule': crontab(hour=0, minute=0),  # Chạy hàng ngày lúc nửa đêm
+        'args': ([
+            'https://www.who.int/news-room/fact-sheets',
+            # Thêm các URL khác
+        ],),
+    },
+}
+
+# Cấu hình LlamaIndex embedding model
+try:
+    Settings.embed_model = GeminiEmbedding(
+        api_key=config('GEMINI_API_KEY'),
+        model_name="models/gemini-embedding-001"  # Sử dụng gemini-embedding-001
+    )
+    logger.info("Đã cấu hình GeminiEmbedding với model gemini-embedding-001")
+except Exception as e:
+    logger.error(f"Lỗi khi cấu hình GeminiEmbedding: {str(e)}")

@@ -30,6 +30,9 @@ import ReviewScreen from './components/Customer/ReviewScreen';
 import ChatScreen from './components/Customer/ChatScreen';
 import EditProductScreen from './components/Distributor/EditProductScreen';
 import InventoryManagementScreen from './components/Distributor/InventoryManagementScreen';
+// Import mới cho các màn hình chưa có
+import ReviewReplyScreen from './components/Distributor/ReviewReplyScreen';
+import RevenueStatisticsScreen from './components/Distributor/RevenueStatisticsScreen';
 import AdminDashboardScreen from './components/Admin/AdminDashboardScreen';
 
 // Tạo Stack và Tab Navigator
@@ -70,13 +73,21 @@ const OrderStackNavigator = () => (
   </Stack.Navigator>
 );
 
+// Stack Navigator cho Products
+const ProductsStackNavigator = () => (
+  <Stack.Navigator screenOptions={{ headerShown: false }}>
+    <Stack.Screen name="EditProductScreen" component={EditProductScreen} />
+  </Stack.Navigator>
+);
+
 // Stack Navigator cho Distributor
 const DistributorStackNavigator = () => (
   <Stack.Navigator screenOptions={{ headerShown: false }}>
-    <Stack.Screen name="EditProductScreen" component={EditProductScreen} />
     <Stack.Screen name="InventoryManagementScreen" component={InventoryManagementScreen} />
     <Stack.Screen name="ProfileScreen" component={ProfileScreen} />
     <Stack.Screen name="NotificationScreen" component={NotificationScreen} />
+    <Stack.Screen name="ReviewReplyScreen" component={ReviewReplyScreen} />
+    <Stack.Screen name="RevenueStatisticsScreen" component={RevenueStatisticsScreen} />
   </Stack.Navigator>
 );
 
@@ -84,6 +95,14 @@ const DistributorStackNavigator = () => (
 const AdminStackNavigator = () => (
   <Stack.Navigator screenOptions={{ headerShown: false }}>
     <Stack.Screen name="AdminDashboardScreen" component={AdminDashboardScreen} />
+    <Stack.Screen name="ProfileScreen" component={ProfileScreen} />
+    <Stack.Screen name="NotificationScreen" component={NotificationScreen} />
+  </Stack.Navigator>
+);
+
+// Stack Navigator cho Profile
+const ProfileStackNavigator = () => (
+  <Stack.Navigator screenOptions={{ headerShown: false }}>
     <Stack.Screen name="ProfileScreen" component={ProfileScreen} />
     <Stack.Screen name="NotificationScreen" component={NotificationScreen} />
   </Stack.Navigator>
@@ -108,17 +127,18 @@ const CustomerTabs = () => (
     {createTabScreen("cart", CartScreen, "Cart", "cart")}
     {createTabScreen("orders", OrderStackNavigator, "Orders", "clipboard-list")}
     {createTabScreen("chat", ChatScreen, "Chat", "chat")}
-    {createTabScreen("profile", ProfileScreen, "Profile", "account")}
+    {createTabScreen("profile", ProfileStackNavigator, "Profile", "account")}
   </Tab.Navigator>
 );
 
 // Tabs cho Distributor
 const DistributorTabs = () => (
   <Tab.Navigator screenOptions={{ headerShown: false }}>
-    {createTabScreen("products", EditProductScreen, "Products", "package-variant")}
+    {createTabScreen("products", ProductsStackNavigator, "Products", "package-variant")}
     {createTabScreen("inventory", InventoryManagementScreen, "Inventory", "warehouse")}
-    {createTabScreen("profile", ProfileScreen, "Profile", "account")}
-    {createTabScreen("notifications", NotificationScreen, "Notifications", "bell")}
+    {createTabScreen("reviewreply", ReviewReplyScreen, "Review Reply", "message-reply-text")}
+    {createTabScreen("revenue", RevenueStatisticsScreen, "Revenue Statistics", "chart-bar")}
+    {createTabScreen("profile", ProfileStackNavigator, "Profile", "account")}
   </Tab.Navigator>
 );
 
@@ -126,8 +146,7 @@ const DistributorTabs = () => (
 const AdminTabs = () => (
   <Tab.Navigator screenOptions={{ headerShown: false }}>
     {createTabScreen("dashboard", AdminStackNavigator, "Dashboard", "view-dashboard")}
-    {createTabScreen("profile", ProfileScreen, "Profile", "account")}
-    {createTabScreen("notifications", NotificationScreen, "Notifications", "bell")}
+    {createTabScreen("profile", ProfileStackNavigator, "Profile", "account")}
   </Tab.Navigator>
 );
 
