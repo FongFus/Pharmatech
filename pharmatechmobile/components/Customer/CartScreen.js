@@ -1,15 +1,22 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { View, Text, Button, FlatList, StyleSheet, ActivityIndicator, Alert, Image, TouchableOpacity, TextInput } from 'react-native';
+import { View, Text, FlatList, StyleSheet, ActivityIndicator, Alert, Image, TouchableOpacity, TextInput, Platform, TouchableNativeFeedback } from 'react-native';
+import { Picker } from '@react-native-picker/picker';
 import { WebView } from 'react-native-webview';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { endpoints, authApis } from '../../configs/Apis';
 import { MyUserContext } from '../../configs/MyContexts';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
+import * as NavigationBar from 'expo-navigation-bar';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 
 const CartScreen = ({ navigation, route }) => {
   const [cart, setCart] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [discountCode, setDiscountCode] = useState('');
+  // Removed discountCode state as manual input is removed
   const [discountAmount, setDiscountAmount] = useState(0);
+  const [discountList, setDiscountList] = useState([]);
+  const [selectedDiscountCode, setSelectedDiscountCode] = useState('');
   const [orderId, setOrderId] = useState(null);
   const [showWebView, setShowWebView] = useState(false);
   const [checkoutUrl, setCheckoutUrl] = useState('');
@@ -17,7 +24,11 @@ const CartScreen = ({ navigation, route }) => {
   const productIdFromParams = route.params?.productId;
 
   useEffect(() => {
-    const fetchCart = async () => {
+    // Add navigation focus listener to refresh cart when screen is focused
+    const unsubscribe = navigation.addListener('focus', async () => {
+      setLoading(true);
+      setDiscountAmount(0);
+      setSelectedDiscountCode('');
       const token = await AsyncStorage.getItem('token');
       const authApi = authApis(token);
       try {
@@ -28,12 +39,14 @@ const CartScreen = ({ navigation, route }) => {
           setCart(carts[0]);
           if (productIdFromParams) {
             await handleAddItem(productIdFromParams, carts[0], authApi);
+            navigation.setParams({ productId: undefined });
           }
         } else {
           const newCart = await authApi.post(endpoints.cartsCreate, {});
           setCart(newCart);
           if (productIdFromParams) {
             await handleAddItem(productIdFromParams, newCart, authApi);
+            navigation.setParams({ productId: undefined });
           }
         }
       } catch (error) {
@@ -42,9 +55,10 @@ const CartScreen = ({ navigation, route }) => {
       } finally {
         setLoading(false);
       }
-    };
-    fetchCart();
-  }, [productIdFromParams]);
+    });
+
+    return unsubscribe;
+  }, [productIdFromParams, navigation]);
 
   const handleAddItem = async (product_id, currentCart = cart, authApiInstance = null) => {
     if (!product_id) {
@@ -87,7 +101,7 @@ const CartScreen = ({ navigation, route }) => {
     try {
       const response = await authApi.post(endpoints.cartsAddItem(cart.id), {
         product_id: item.product.id,
-        quantity: newQuantity,
+        quantity: delta,
       });
       setCart(response);
     } catch (error) {
@@ -110,6 +124,57 @@ const CartScreen = ({ navigation, route }) => {
     }
   };
 
+  useEffect(() => {
+    const fetchDiscounts = async () => {
+      const token = await AsyncStorage.getItem('token');
+      const authApi = authApis(token);
+      try {
+        const response = await authApi.get(endpoints.discountsList);
+        const discounts = response.results || response;
+        console.log('Discounts fetched:', discounts);
+        setDiscountList(discounts);
+      } catch (error) {
+        console.error('Fetch discounts error:', error.response?.data || error.message);
+      }
+    };
+    fetchDiscounts();
+  }, []);
+
+  // Remove handleApplyDiscount function as manual apply button is removed
+
+  // New function to apply discount immediately on dropdown change
+  const handleApplyDiscountImmediate = async (discountCode) => {
+    if (!cart || cart.items.length === 0) {
+      Alert.alert('Lỗi', 'Giỏ hàng trống');
+      setDiscountAmount(0);
+      return;
+    }
+    if (!discountCode.trim()) {
+      Alert.alert('Lỗi', 'Vui lòng chọn mã giảm giá');
+      setDiscountAmount(0);
+      return;
+    }
+    const token = await AsyncStorage.getItem('token');
+    const authApi = authApis(token);
+    try {
+      const discountResponse = await authApi.post(endpoints.discountsApply, {
+        discount_code: discountCode,
+        cart_id: cart.id
+      });
+      setDiscountAmount(parseFloat(discountResponse.discount_amount));
+      // Update cart with discount amount
+      setCart(prevCart => ({
+        ...prevCart,
+        discount_amount: discountResponse.discount_amount
+      }));
+      // No alert needed on dropdown change
+    } catch (discountError) {
+      console.error('Discount error:', discountError);
+      Alert.alert('Lỗi', 'Mã giảm giá không hợp lệ');
+      setDiscountAmount(0);
+    }
+  };
+
   const handleCheckout = async () => {
     if (!cart || cart.items.length === 0) {
       Alert.alert('Lỗi', 'Giỏ hàng trống');
@@ -118,33 +183,20 @@ const CartScreen = ({ navigation, route }) => {
     const token = await AsyncStorage.getItem('token');
     const authApi = authApis(token);
     try {
-      // Create order
-      const orderResponse = await authApi.post(endpoints.ordersCreate, { cart_id: cart.id });
+      // Create order with discount code if selected
+      const orderData = { cart_id: cart.id };
+      if (selectedDiscountCode) {
+        orderData.discount_code = selectedDiscountCode;
+      }
+      const orderResponse = await authApi.post(endpoints.ordersCreate, orderData);
       const order = orderResponse;
       setOrderId(order.id);
 
-      // Apply discount if code provided
-      if (discountCode) {
-        try {
-          const discountResponse = await authApi.post(endpoints.discountsApply, {
-            discount_code: discountCode,
-            order_id: order.id
-          });
-          setDiscountAmount(parseFloat(discountResponse.discount_amount));
-          // Update order with discount
-          await authApi.put(endpoints.ordersUpdate(order.id), {
-            discount_amount: discountResponse.discount_amount
-          });
-        } catch (discountError) {
-          console.error('Discount error:', discountError);
-          Alert.alert('Lỗi', 'Mã giảm giá không hợp lệ');
-          return;
-        }
-      }
-
-      // Create Stripe payment
+      // Create Stripe payment with correct amount after discount
       const paymentResponse = await authApi.post(endpoints.paymentsCreateStripePayment, {
-        order_id: order.id
+        order_id: order.id,
+        // Optionally, send discounted amount if API supports it
+        // amount: discountedTotal,
       });
       setCheckoutUrl(paymentResponse.checkout_url);
       setShowWebView(true);
@@ -171,7 +223,6 @@ const CartScreen = ({ navigation, route }) => {
         }
         return true;
       } catch (error) {
-        // Suppress logging of WinError 10061 and similar connection errors to avoid clutter
         const isConnectionError = error.message?.includes('WinError 10061') ||
                                  error.message?.includes('ECONNREFUSED') ||
                                  error.code === 'ECONNREFUSED' ||
@@ -184,12 +235,9 @@ const CartScreen = ({ navigation, route }) => {
         if (isConnectionError && retryCount < maxRetries) {
           retryCount++;
           console.log(`Retrying payment callback in 2 seconds... (attempt ${retryCount + 1}/${maxRetries + 1})`);
-
-          // Wait 2 seconds before retrying
           await new Promise(resolve => setTimeout(resolve, 2000));
           return attemptCallback();
         } else {
-          // Max retries reached or different error
           if (retryCount >= maxRetries) {
             Alert.alert(
               'Thông báo',
@@ -207,7 +255,6 @@ const CartScreen = ({ navigation, route }) => {
               ]
             );
           } else {
-            // Different error, show generic message
             Alert.alert('Lỗi', 'Có lỗi xảy ra khi xử lý thanh toán. Vui lòng thử lại.');
             setShowWebView(false);
           }
@@ -246,192 +293,336 @@ const CartScreen = ({ navigation, route }) => {
 
   const renderItem = ({ item }) => (
     <View style={styles.item}>
-      {item.product.image ? (
-        <Image source={{ uri: item.product.image }} style={styles.image} />
-      ) : (
-        <View style={[styles.image, styles.imagePlaceholder]}>
-          <Text style={styles.imagePlaceholderText}>No Image</Text>
+      <View style={styles.itemContent}>
+        {item.product.image ? (
+          <Image source={{ uri: item.product.image }} style={styles.image} />
+        ) : (
+          <View style={styles.imagePlaceholder}>
+            <Text style={styles.imagePlaceholderText}>Chưa có hình ảnh</Text>
+          </View>
+        )}
+        <View style={styles.itemInfo}>
+          <Text style={styles.title}>{item.product.name}</Text>
+          <Text style={styles.detail}>Giá: {item.product.price} VND</Text>
+          <View style={styles.quantityContainer}>
+            <TouchableOpacity onPress={() => handleUpdateQuantity(item, -1)} style={styles.quantityButton}>
+              <Text style={styles.quantityButtonText}>-</Text>
+            </TouchableOpacity>
+            <Text style={styles.quantityText}>{item.quantity}</Text>
+            <TouchableOpacity onPress={() => handleUpdateQuantity(item, 1)} style={styles.quantityButton}>
+              <Text style={styles.quantityButtonText}>+</Text>
+            </TouchableOpacity>
+          </View>
         </View>
-      )}
-      <Text style={styles.title}>{item.product.name}</Text>
-      <Text style={styles.detail}>Giá: {item.product.price} VND</Text>
-      <View style={styles.quantityContainer}>
-        <TouchableOpacity onPress={() => handleUpdateQuantity(item, -1)} style={styles.quantityButton}>
-          <Text style={styles.quantityButtonText}>-</Text>
-        </TouchableOpacity>
-        <Text style={styles.quantityText}>{item.quantity}</Text>
-        <TouchableOpacity onPress={() => handleUpdateQuantity(item, 1)} style={styles.quantityButton}>
-          <Text style={styles.quantityButtonText}>+</Text>
-        </TouchableOpacity>
       </View>
-      <Button title="Xóa" onPress={() => handleRemoveItem(item.id)} color="#FF0000" />
+      <TouchableOpacity style={styles.removeButton} onPress={() => handleRemoveItem(item.id)}>
+        <Text style={styles.buttonText}>Xóa</Text>
+      </TouchableOpacity>
     </View>
   );
 
   if (loading) {
-    return <ActivityIndicator size="large" color="#007AFF" />;
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar barStyle="light-content" />
+        <View style={styles.statusBarBackground} />
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#007AFF" />
+          <Text style={styles.loadingText}>Đang tải...</Text>
+        </View>
+      </SafeAreaView>
+    );
   }
 
   const total = cart ? cart.items.reduce((sum, item) => sum + item.quantity * parseFloat(item.product.price), 0) : 0;
   const discountedTotal = total - discountAmount;
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.header}>Giỏ hàng</Text>
-      <Button title="Thêm từ danh sách" onPress={() => navigation.navigate('home')} color="#007AFF" />
-      {cart ? (
-        <>
-          <FlatList
-            data={cart.items}
-            renderItem={renderItem}
-            keyExtractor={item => item.id.toString()}
-            ListEmptyComponent={<Text style={styles.warning}>Giỏ hàng trống</Text>}
-          />
-          <View style={styles.discountContainer}>
-            <TextInput
-              style={styles.discountInput}
-              placeholder="Nhập mã giảm giá"
-              value={discountCode}
-              onChangeText={setDiscountCode}
+    <SafeAreaView style={styles.safeArea}>
+      <StatusBar barStyle="light-content" />
+      <View style={styles.statusBarBackground} />
+      <View style={styles.container}>
+        <Text style={styles.header}>Giỏ hàng</Text>
+        <TouchableOpacity style={styles.addButton} onPress={() => navigation.navigate('home')}>
+          <Text style={styles.buttonText}>Thêm từ danh sách</Text>
+        </TouchableOpacity>
+        {cart ? (
+          <>
+            <FlatList
+              data={cart.items}
+              renderItem={renderItem}
+              keyExtractor={item => item.id.toString()}
+              ListEmptyComponent={<Text style={styles.warning}>Giỏ hàng trống</Text>}
+              contentContainerStyle={styles.listContent}
             />
-            <Button title="Áp dụng" onPress={() => {}} color="#28A745" />
-          </View>
-          <Text style={styles.total}>Tổng giá trị: {total} VND</Text>
-          {discountAmount > 0 && (
-            <Text style={styles.discountText}>Giảm giá: {discountAmount} VND</Text>
-          )}
-          <Text style={styles.finalTotal}>Tổng thanh toán: {discountedTotal} VND</Text>
-          <Button title="Thanh toán" onPress={handleCheckout} color="#007AFF" />
-        </>
-      ) : (
-        <Text style={styles.warning}>Không có giỏ hàng</Text>
-      )}
+            <View style={styles.discountSection}>
+              <Text style={styles.discountTitle}>Mã giảm giá</Text>
 
-      {/* Full-screen WebView Modal */}
-      {showWebView && (
-        <View style={styles.fullScreenModal}>
-          <View style={styles.webViewHeader}>
-            <TouchableOpacity
-              onPress={() => setShowWebView(false)}
-              style={styles.closeButton}
-            >
-              <Text style={styles.closeButtonText}>✕</Text>
+              {/* Dropdown for discount codes - Full width */}
+              <View style={styles.fullWidthDropdownContainer}>
+                <Picker
+                  selectedValue={selectedDiscountCode}
+                  onValueChange={(itemValue) => {
+                    console.log('Selected discount:', itemValue);
+                    setSelectedDiscountCode(itemValue);
+                    // Apply discount immediately on selection change
+                    if (itemValue) {
+                      handleApplyDiscountImmediate(itemValue);
+                    } else {
+                      setDiscountAmount(0);
+                    }
+                  }}
+                  mode="dropdown"
+                  style={styles.fullWidthPicker}
+                  dropdownIconColor="#007AFF"
+                  enabled={discountList && discountList.length > 0}
+                >
+                  <Picker.Item label="Chọn mã giảm giá" value="" />
+                  {discountList && discountList.length > 0 ? (
+                    discountList.map((discount) => (
+                      <Picker.Item
+                        key={discount.id}
+                        label={`${discount.code} - ${discount.description || ''}`}
+                        value={discount.code}
+                      />
+                    ))
+                  ) : (
+                    <Picker.Item label="Đang tải..." value="" enabled={false} />
+                  )}
+                </Picker>
+              </View>
+
+            </View>
+            <Text style={styles.total}>Tổng giá trị: {total} VND</Text>
+            {discountAmount > 0 && (
+              <Text style={styles.discountText}>Giảm giá: {discountAmount} VND</Text>
+            )}
+            <Text style={styles.finalTotal}>Tổng thanh toán: {discountedTotal} VND</Text>
+            <TouchableOpacity style={styles.checkoutButton} onPress={handleCheckout}>
+              <Text style={styles.buttonText}>Thanh toán</Text>
             </TouchableOpacity>
-            <Text style={styles.webViewTitle}>Thanh toán</Text>
+          </>
+        ) : (
+          <Text style={styles.warning}>Không có giỏ hàng</Text>
+        )}
+
+        {showWebView && (
+          <View style={styles.fullScreenModal}>
+            <View style={styles.webViewHeader}>
+              <TouchableOpacity
+                onPress={() => setShowWebView(false)}
+                style={styles.closeButton}
+              >
+                <Text style={styles.closeButtonText}>✕</Text>
+              </TouchableOpacity>
+              <Text style={styles.webViewTitle}>Thanh toán</Text>
+            </View>
+            <WebView
+              source={{ uri: checkoutUrl }}
+              onNavigationStateChange={handleWebViewNavigation}
+              style={styles.fullScreenWebView}
+              javaScriptEnabled={true}
+              domStorageEnabled={true}
+              startInLoadingState={true}
+              scalesPageToFit={true}
+            />
           </View>
-          <WebView
-            source={{ uri: checkoutUrl }}
-            onNavigationStateChange={handleWebViewNavigation}
-            style={styles.fullScreenWebView}
-            javaScriptEnabled={true}
-            domStorageEnabled={true}
-            startInLoadingState={true}
-            scalesPageToFit={true}
-          />
-        </View>
-      )}
-    </View>
+        )}
+      </View>
+    </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
+  safeArea: {
     flex: 1,
     backgroundColor: '#FFFFFF',
+  },
+  statusBarBackground: {
+    backgroundColor: '#007AFF',
+    height: StatusBar.currentHeight || 0,
+  },
+  container: {
+    flex: 1,
     padding: 16,
   },
   header: {
     fontSize: 24,
-    fontFamily: 'Roboto',
     fontWeight: '700',
     color: '#007AFF',
     marginBottom: 16,
+    textAlign: 'center',
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
+  },
+  listContent: {
+    paddingBottom: 16,
   },
   item: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     padding: 12,
     borderBottomWidth: 1,
-    borderBottomColor: 'gray',
+    borderBottomColor: '#eee',
     marginBottom: 12,
   },
-  title: {
-    fontSize: 18,
-    fontFamily: 'Roboto',
-    fontWeight: '700',
-  },
-  detail: {
-    fontSize: 16,
-    fontFamily: 'Roboto',
-    fontWeight: '400',
-  },
-  total: {
-    fontSize: 18,
-    fontFamily: 'Roboto',
-    fontWeight: '700',
-    color: '#007AFF',
-    textAlign: 'center',
-    marginVertical: 16,
-  },
-  warning: {
-    fontSize: 16,
-    fontFamily: 'Roboto-Italic',
-    fontWeight: '400',
-    color: 'red',
-    textAlign: 'center',
-    marginTop: 20,
+  itemContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
   },
   image: {
-    width: 80,
-    height: 80,
-    marginBottom: 8,
+    width: 60,
+    height: 60,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    marginRight: 12,
   },
   imagePlaceholder: {
-    backgroundColor: '#ccc',
+    width: 60,
+    height: 60,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    backgroundColor: '#f9f9f9',
     justifyContent: 'center',
     alignItems: 'center',
+    marginRight: 12,
   },
   imagePlaceholderText: {
-    color: '#666',
+    color: '#999',
+    fontSize: 12,
+    fontStyle: 'italic',
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
+  },
+  itemInfo: {
+    flex: 1,
+  },
+  title: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 4,
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
+  },
+  detail: {
     fontSize: 14,
+    fontWeight: '400',
+    color: '#666',
+    marginBottom: 8,
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
   },
   quantityContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginVertical: 8,
   },
   quantityButton: {
     backgroundColor: '#007AFF',
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 4,
+    marginHorizontal: 4,
   },
   quantityButtonText: {
     color: '#fff',
-    fontSize: 18,
-    fontWeight: '700',
+    fontSize: 16,
+    fontWeight: '600',
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
   },
   quantityText: {
-    marginHorizontal: 12,
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: '600',
+    color: '#333',
+    marginHorizontal: 8,
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
+  },
+  removeButton: {
+    backgroundColor: '#FF6B35',
+    padding: 8,
+    borderRadius: 4,
+    alignItems: 'center',
+    minWidth: 60,
+  },
+  addButton: {
+    backgroundColor: '#007AFF',
+    padding: 15,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  discountSection: {
+    marginVertical: 16,
+  },
+  discountTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#007AFF',
+    marginBottom: 8,
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
   },
   discountContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginVertical: 16,
+    marginVertical: 12,
   },
   discountInput: {
     flex: 1,
     borderWidth: 1,
-    borderColor: '#ccc',
-    padding: 8,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    fontSize: 16,
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
+    backgroundColor: '#fff',
     marginRight: 8,
-    borderRadius: 4,
+  },
+  dropdownContainer: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    marginVertical: 8,
+    backgroundColor: '#fff',
+  },
+  picker: {
+    height: 50,
+    width: '100%',
+  },
+  fullWidthDropdownContainer: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    marginVertical: 8,
+    backgroundColor: '#fff',
+    width: '100%',
+  },
+  fullWidthPicker: {
+    height: 50,
+    width: '100%',
+  },
+  applyDiscountButton: {
+    backgroundColor: '#28A745',
+    padding: 15,
+    borderRadius: 8,
+    alignItems: 'center',
+    minWidth: 100,
+  },
+  total: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#007AFF',
+    textAlign: 'center',
+    marginVertical: 8,
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
   },
   discountText: {
     fontSize: 16,
+    fontWeight: '600',
     color: '#28A745',
     textAlign: 'center',
     marginVertical: 4,
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
   },
   finalTotal: {
     fontSize: 20,
@@ -439,10 +630,40 @@ const styles = StyleSheet.create({
     color: '#007AFF',
     textAlign: 'center',
     marginVertical: 8,
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
   },
-  webView: {
+  checkoutButton: {
+    backgroundColor: '#007AFF',
+    padding: 15,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  buttonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
+  },
+  warning: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#F44336',
+    textAlign: 'center',
+    marginVertical: 20,
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
+  },
+  loadingContainer: {
     flex: 1,
-    marginTop: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#333',
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
   },
   fullScreenModal: {
     position: 'absolute',
@@ -456,12 +677,16 @@ const styles = StyleSheet.create({
   webViewHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     paddingHorizontal: 16,
     paddingVertical: 12,
     backgroundColor: '#007AFF',
     borderBottomWidth: 1,
-    borderBottomColor: '#E5E5E5',
+    borderBottomColor: '#ddd',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
   },
   closeButton: {
     padding: 8,
@@ -471,13 +696,16 @@ const styles = StyleSheet.create({
   closeButtonText: {
     color: '#FFFFFF',
     fontSize: 18,
-    fontWeight: 'bold',
+    fontWeight: '600',
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
   },
   webViewTitle: {
     color: '#FFFFFF',
     fontSize: 18,
     fontWeight: '700',
-    fontFamily: 'Roboto',
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
+    flex: 1,
+    textAlign: 'center',
   },
   fullScreenWebView: {
     flex: 1,

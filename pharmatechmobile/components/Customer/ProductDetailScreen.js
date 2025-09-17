@@ -1,8 +1,22 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, Image, Button, StyleSheet, ActivityIndicator, Alert } from 'react-native';
+import {
+  View,
+  Text,
+  Image,
+  StyleSheet,
+  ActivityIndicator,
+  Alert,
+  TouchableOpacity,
+  TouchableNativeFeedback,
+  Platform,
+  SafeAreaView,
+} from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { endpoints, authApis } from '../../configs/Apis';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
+import { StatusBar } from 'expo-status-bar';
+import * as NavigationBar from 'expo-navigation-bar';
 
 const ProductDetailScreen = () => {
   const [product, setProduct] = useState(null);
@@ -27,158 +41,258 @@ const ProductDetailScreen = () => {
     fetchProduct();
   }, [productId]);
 
-const getCartId = async () => {
-  const token = await AsyncStorage.getItem('token');
-  const authApi = authApis(token);
-  try {
-    const response = await authApi.get(endpoints.cartsList);
-    const carts = response || [];
-    if (carts.length > 0) {
-      return carts[0].id; // Assume the first cart is the active one
-    } else {
-      // Create a new cart
-      const createResponse = await authApi.post(endpoints.cartsList, {});
-      return createResponse.id;
-    }
-  } catch (error) {
-    throw new Error('Không thể lấy giỏ hàng');
-  }
-};
-
-const handleAddToCart = async () => {
-  if (!product.total_stock || product.total_stock <= 0) {
-    Alert.alert('Lỗi', 'Sản phẩm hết hàng');
-    return;
-  }
-  const token = await AsyncStorage.getItem('token');
-  const authApi = authApis(token);
-  try {
-    const cartId = await getCartId();
-    await authApi.post(endpoints.cartsAddItem(cartId), { product_id: productId, quantity: 1 });
-    Alert.alert('Thành công', 'Đã thêm vào giỏ hàng');
-    navigation.navigate('CartScreen', { productId });
-  } catch (error) {
-    let errorMessage = 'Không thể thêm vào giỏ hàng';
-    try {
-      const errorData = JSON.parse(error.message);
-      if (errorData.status === 400) {
-        errorMessage = errorData.detail || 'Sản phẩm hết hàng hoặc không khả dụng';
-      } else if (errorData.status === 404) {
-        errorMessage = 'Giỏ hàng không tồn tại';
+  useEffect(() => {
+    const setNavBarColor = async () => {
+      if (Platform.OS === 'android') {
+        // Since setBackgroundColorAsync is not supported with edge-to-edge enabled,
+        // we will not call it here to avoid warnings.
+        // Instead, render a view under the status bar to change its background color.
+        await NavigationBar.setButtonStyleAsync('dark');
       }
-    } catch (parseError) {
-      // If not JSON, use default
+    };
+    setNavBarColor();
+  }, []);
+
+
+
+  const handleAddToCart = async () => {
+    if (!product.total_stock || product.total_stock <= 0) {
+      Alert.alert('Lỗi', 'Sản phẩm hết hàng');
+      return;
     }
-    Alert.alert('Lỗi', errorMessage);
+    navigation.navigate('CartScreen', { productId: product.id });
+  };
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar barStyle="light-content" />
+        <View style={styles.statusBarBackground} />
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#007AFF" />
+          <Text style={styles.loadingText}>Đang tải...</Text>
+        </View>
+      </SafeAreaView>
+    );
   }
-};
 
-const handleBuyNow = async () => {
-  if (!product.total_stock || product.total_stock <= 0) {
-    Alert.alert('Lỗi', 'Sản phẩm hết hàng');
-    return;
+  if (!product) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar barStyle="light-content" />
+        <View style={styles.statusBarBackground} />
+        <View style={styles.errorContainer}>
+          <Text style={styles.warning}>Sản phẩm không tồn tại</Text>
+          <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
+            <Text style={styles.buttonText}>Quay lại</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
   }
-  const token = await AsyncStorage.getItem('token');
-  const authApi = authApis(token);
-  try {
-    const orderResponse = await authApi.post(endpoints.ordersCreate, {
-      items: [{ product_id: productId, quantity: 1 }]
-    });
-    Alert.alert('Thành công', 'Đã tạo đơn hàng');
-    navigation.navigate('PaymentScreen', { orderId: orderResponse.id });
-  } catch (error) {
-    let errorMessage = 'Không thể tạo đơn hàng';
-    try {
-      const errorData = JSON.parse(error.message);
-      if (errorData.status === 400) {
-        errorMessage = errorData.detail || 'Sản phẩm hết hàng hoặc không khả dụng';
-      }
-    } catch (parseError) {
-      // If not JSON, use default
-    }
-    Alert.alert('Lỗi', errorMessage);
-  }
-};
 
-if (loading) {
-  return <ActivityIndicator size="large" color="#007AFF" />;
-}
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <StatusBar barStyle="light-content" />
+      <View style={styles.statusBarBackground} />
+      <KeyboardAwareScrollView
+        style={styles.container}
+        keyboardShouldPersistTaps="handled"
+        enableOnAndroid={true}
+        extraScrollHeight={100}
+      >
+        <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
+          <Text style={styles.buttonText}>Quay lại</Text>
+        </TouchableOpacity>
 
-if (!product) {
-  return <Text style={styles.warning}>Sản phẩm không tồn tại</Text>;
-}
+        <Text style={styles.header}>Chi tiết sản phẩm</Text>
 
-return (
-  <View style={styles.container}>
-    <Image source={{ uri: product.image }} style={styles.image} />
-    <Text style={styles.header}>Chi tiết sản phẩm</Text>
-    <Text style={styles.title}>{product.name}</Text>
-    <Text style={styles.price}>Giá: {product.price} VND</Text>
-    <Text style={styles.quantity}>Số lượng: {product.total_stock || 'Hết hàng'}</Text>
-    <Text style={styles.description}>{product.description}</Text>
-    <Button title="Thêm vào giỏ" onPress={handleAddToCart} color="#007AFF" />
-    <Button
-      title="Mua ngay"
-      onPress={handleBuyNow}
-      color="#007AFF"
-    />
-    <Button
-      title="Xem đánh giá"
-      onPress={() => navigation.navigate('ReviewScreen', { productId })}
-      color="#007AFF"
-    />
-  </View>
-);
+        <View style={styles.imageSection}>
+          {product.image ? (
+            <Image source={{ uri: product.image }} style={styles.image} />
+          ) : (
+            <View style={styles.imagePlaceholder}>
+              <Text style={styles.placeholderText}>Chưa có hình ảnh</Text>
+            </View>
+          )}
+        </View>
+
+        <View style={styles.infoSection}>
+          <Text style={styles.title}>{product.name}</Text>
+          <Text style={styles.price}>Giá: {product.price} VND</Text>
+          <Text style={[styles.quantity, { color: product.total_stock > 0 ? '#333' : '#F44336' }]}>
+            Số lượng: {product.total_stock || 'Hết hàng'}
+          </Text>
+          <Text style={styles.description}>{product.description}</Text>
+        </View>
+
+        <View style={styles.buttonGroup}>
+          {Platform.select({
+            ios: (
+              <>
+                <TouchableOpacity style={[styles.button, styles.addToCartButton]} onPress={handleAddToCart}>
+                  <Text style={styles.buttonText}>Thêm vào giỏ</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.button, styles.reviewButton]}
+                  onPress={() => navigation.navigate('ReviewScreen', { productId })}
+                >
+                  <Text style={styles.buttonText}>Xem đánh giá</Text>
+                </TouchableOpacity>
+              </>
+            ),
+            android: (
+              <>
+                <TouchableNativeFeedback onPress={handleAddToCart} background={TouchableNativeFeedback.Ripple('#007AFF', false)}>
+                  <View style={[styles.button, styles.addToCartButton]}>
+                    <Text style={styles.buttonText}>Thêm vào giỏ</Text>
+                  </View>
+                </TouchableNativeFeedback>
+                <TouchableNativeFeedback onPress={() => navigation.navigate('ReviewScreen', { productId })} background={TouchableNativeFeedback.Ripple('#6c757d', false)}>
+                  <View style={[styles.button, styles.reviewButton]}>
+                    <Text style={styles.buttonText}>Xem đánh giá</Text>
+                  </View>
+                </TouchableNativeFeedback>
+              </>
+            ),
+          })}
+        </View>
+      </KeyboardAwareScrollView>
+    </SafeAreaView>
+  );
 };
 
 const styles = StyleSheet.create({
-  container: {
+  safeArea: {
     flex: 1,
     backgroundColor: '#FFFFFF',
+  },
+  statusBarBackground: {
+    height: Platform.OS === 'ios' ? 0 : 24, // Adjust height for Android status bar
+    backgroundColor: '#007AFF',
+  },
+  container: {
+    flex: 1,
     padding: 16,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#333',
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  warning: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#F44336',
+    textAlign: 'center',
+    marginBottom: 20,
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
+  },
+  header: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#007AFF',
+    marginBottom: 16,
+    textAlign: 'center',
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
+  },
+  imageSection: {
+    alignItems: 'center',
+    marginBottom: 20,
   },
   image: {
     width: 200,
     height: 200,
-    marginBottom: 16,
-    alignSelf: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#ddd',
   },
-  header: {
-    fontSize: 24,
-    fontFamily: 'Roboto',
-    fontWeight: '700',
-    color: '#007AFF',
-    marginBottom: 16,
+  imagePlaceholder: {
+    width: 200,
+    height: 200,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f9f9f9',
+  },
+  placeholderText: {
+    color: '#999',
+    fontStyle: 'italic',
+    fontSize: 16,
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
+  },
+  infoSection: {
+    marginBottom: 20,
   },
   title: {
     fontSize: 20,
-    fontFamily: 'Roboto',
-    fontWeight: '700',
+    fontWeight: '600',
+    color: '#333',
     marginBottom: 8,
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
   },
   price: {
     fontSize: 16,
-    fontFamily: 'Roboto',
-    fontWeight: '400',
+    fontWeight: '500',
+    color: '#333',
+    marginBottom: 8,
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
   },
   quantity: {
     fontSize: 16,
-    fontFamily: 'Roboto',
-    fontWeight: '400',
+    fontWeight: '500',
+    marginBottom: 8,
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
   },
   description: {
     fontSize: 16,
-    fontFamily: 'Roboto-Italic',
     fontWeight: '400',
+    color: '#666',
     marginBottom: 16,
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
   },
-  warning: {
+  buttonGroup: {
+    marginTop: 8,
+  },
+  button: {
+    padding: 15,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  addToCartButton: {
+    backgroundColor: '#007AFF',
+  },
+  reviewButton: {
+    backgroundColor: '#6c757d',
+  },
+  backButton: {
+    backgroundColor: '#6c757d',
+    padding: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  buttonText: {
+    color: 'white',
+    fontWeight: '600',
     fontSize: 16,
-    fontFamily: 'Roboto-Italic',
-    fontWeight: '400',
-    color: 'red',
-    textAlign: 'center',
-    marginTop: 20,
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
   },
 });
 

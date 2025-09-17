@@ -72,6 +72,7 @@ const endpoints = {
   reviewsDelete: id => `${BASE_URL}reviews/${id}/`,
   reviewsProduct: product_id => `${BASE_URL}reviews/product/${product_id}/reviews/`,
   reviewReplies: `${BASE_URL}review-replies/`,
+  discountsList: `${BASE_URL}discounts/`,
   discountsApply: `${BASE_URL}discounts/apply/`,
   statistics: `${BASE_URL}statistics/`,
   distributorStatistics: `${BASE_URL}distributor-statistics/`,

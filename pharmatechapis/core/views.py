@@ -438,10 +438,35 @@ class CartViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.UpdateA
     @action(detail=True, methods=['post'], url_path='add-item')
     def add_item(self, request, pk=None):
         cart = self.get_object()
-        serializer = CartItemSerializer(data=request.data, context={'request': request})
-        serializer.is_valid(raise_exception=True)
-        serializer.save(cart=cart)
-        return Response(CartSerializer(cart).data, status=status.HTTP_201_CREATED)
+        product_id = request.data.get('product_id')
+        quantity = request.data.get('quantity', 1)
+
+        if not product_id:
+            return Response({"error": "Thiếu product_id."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            product = Product.objects.get(id=product_id, is_approved=True)
+        except Product.DoesNotExist:
+            return Response({"error": "Sản phẩm không tồn tại hoặc chưa được duyệt."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Kiểm tra xem mặt hàng đã tồn tại trong giỏ chưa
+        existing_item = cart.items.filter(product=product).first()
+
+        if existing_item:
+            # Cập nhật số lượng của CartItem hiện tại
+            existing_item.quantity += int(quantity)
+            if existing_item.quantity <= 0:
+                existing_item.delete()
+            else:
+                existing_item.save()
+        else:
+            # Tạo CartItem mới nếu quantity > 0
+            if int(quantity) > 0:
+                serializer = CartItemSerializer(data=request.data, context={'request': request})
+                serializer.is_valid(raise_exception=True)
+                serializer.save(cart=cart)
+
+        return Response(CartSerializer(cart).data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'], url_path='remove-item')
     def remove_item(self, request, pk=None):
@@ -832,10 +857,10 @@ class DiscountViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.Upd
     @action(detail=False, methods=['post'], url_path='apply')
     def apply_discount(self, request):
         discount_code = request.data.get('discount_code')
-        order_id = request.data.get('order_id')
+        cart_id = request.data.get('cart_id')
 
-        if not discount_code or not order_id:
-            return Response({'error': 'discount_code và order_id là bắt buộc.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not discount_code or not cart_id:
+            return Response({'error': 'discount_code và cart_id là bắt buộc.'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             discount = Discount.objects.get(code=discount_code)
@@ -847,17 +872,18 @@ class DiscountViewSet(viewsets.ViewSet, generics.ListCreateAPIView, generics.Upd
             return Response({'error': 'Mã giảm giá không hợp lệ hoặc đã hết hạn.'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            order = Order.objects.get(id=order_id)
-        except Order.DoesNotExist:
-            return Response({'error': 'Đơn hàng không tồn tại.'}, status=status.HTTP_404_NOT_FOUND)
+            cart = Cart.objects.prefetch_related('items__product').get(id=cart_id, user=request.user)
+            total_amount = sum(item.quantity * item.product.price for item in cart.items.all())
+        except Cart.DoesNotExist:
+            return Response({'error': 'Giỏ hàng không tồn tại.'}, status=status.HTTP_404_NOT_FOUND)
 
-        valid, message = discount.is_valid(order.total_amount)
+        valid, message = discount.is_valid(total_amount)
         if not valid:
             return Response({'error': message}, status=status.HTTP_400_BAD_REQUEST)
 
         # Tính discount_amount
         if discount.discount_type == 'percentage':
-            discount_amount = order.total_amount * (discount.discount_value / 100)
+            discount_amount = total_amount * (discount.discount_value / 100)
             if discount.max_discount_amount:
                 discount_amount = min(discount_amount, discount.max_discount_amount)
         else:
