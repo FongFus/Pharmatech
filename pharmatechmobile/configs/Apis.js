@@ -35,6 +35,7 @@ const endpoints = {
   productsDelete: id => `${BASE_URL}products/${id}/`,
   productsApprove: id => `${BASE_URL}products/${id}/approve/`,
   productsUnapprove: id => `${BASE_URL}products/${id}/unapprove/`,
+  productsInventoryStatus: `${BASE_URL}products/inventory-status/`,
   cartsList: `${BASE_URL}carts/`,
   cartsCreate: `${BASE_URL}carts/`,
   cartsRead: id => `${BASE_URL}carts/${id}/`,

@@ -5,7 +5,7 @@ from rest_framework.filters import SearchFilter, OrderingFilter
 from django_filters import rest_framework as filters
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django_filters.rest_framework import DjangoFilterBackend
-from django.db.models import Sum, Count, Avg
+from django.db.models import Sum, Count, Avg, Exists, OuterRef
 from django.shortcuts import get_object_or_404
 from django.core.mail import send_mail
 from django.core.cache import cache
@@ -378,7 +378,7 @@ class ProductViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIV
     def get_permissions(self):
         if self.action in ['list', 'retrieve']:
             return [permissions.AllowAny()]
-        elif self.action in ['create', 'my_products']:
+        elif self.action in ['create', 'my_products', 'inventory_status']:
             return [IsDistributor()]
         elif self.action in ['update', 'partial_update', 'destroy']:
             return [IsDistributor(), IsProductOwner()]
@@ -415,6 +415,28 @@ class ProductViewSet(viewsets.ViewSet, generics.ListAPIView, generics.CreateAPIV
     @action(detail=False, methods=['get'], url_path='my-products')
     def my_products(self, request):
         queryset = Product.objects.filter(distributor=request.user)
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'], url_path='inventory-status')
+    def inventory_status(self, request):
+        from django.db.models import Exists
+        queryset = Product.objects.filter(distributor=request.user).annotate(
+            has_inventory=Exists(Inventory.objects.filter(product=OuterRef('pk'), distributor=request.user))
+        )
+        # Filter by has_inventory if specified
+        has_inventory_param = request.query_params.get('has_inventory')
+        if has_inventory_param is not None:
+            if has_inventory_param.lower() == 'true':
+                queryset = queryset.filter(has_inventory=True)
+            elif has_inventory_param.lower() == 'false':
+                queryset = queryset.filter(has_inventory=False)
+        # Apply other filters (search, category, etc.)
+        queryset = self.filter_queryset(queryset)
         page = self.paginate_queryset(queryset)
         if page is not None:
             serializer = self.get_serializer(page, many=True)
