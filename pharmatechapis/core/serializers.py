@@ -84,10 +84,11 @@ class ProductSerializer(ModelSerializer):
     total_stock = serializers.SerializerMethodField()
     distributor_name = serializers.CharField(source='distributor.full_name', read_only=True)
     category_name = serializers.CharField(source='category.name', read_only=True, allow_null=True)
+    has_inventory = serializers.BooleanField(read_only=True)
     class Meta:
         model = Product
-        fields = ['id', 'distributor', 'distributor_name', 'name', 'description', 'category', 'category_name', 'price', 'total_stock', 'image', 'is_approved', 'created_at', 'updated_at']
-        read_only_fields = ['id', 'distributor', 'created_at', 'updated_at', 'is_approved']
+        fields = ['id', 'distributor', 'distributor_name', 'name', 'description', 'category', 'category_name', 'price', 'total_stock', 'has_inventory', 'image', 'is_approved', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'distributor', 'created_at', 'updated_at', 'is_approved', 'has_inventory']
 
     def get_total_stock(self, obj):
         return obj.total_stock
@@ -166,8 +167,25 @@ class CartItemSerializer(ModelSerializer):
         if product:
             product_instance = Product.objects.get(id=product)
             if value > product_instance.total_stock:
-                raise serializers.ValidationError(f"Số lượng vượt quá tồn kho ({product_instance.stock}).")
+                raise serializers.ValidationError(f"Số lượng vượt quá tồn kho ({product_instance.total_stock}).")
         return value
+
+    def create(self, validated_data):
+        cart = validated_data.get('cart')
+        product = validated_data['product']
+        quantity = validated_data['quantity']
+
+        # Kiểm tra xem mặt hàng đã tồn tại trong giỏ chưa
+        existing_item = CartItem.objects.filter(cart=cart, product=product).first()
+
+        if existing_item:
+            # Tăng số lượng của CartItem hiện tại
+            existing_item.quantity += quantity
+            existing_item.save()
+            return existing_item
+        else:
+            # Tạo CartItem mới
+            return CartItem.objects.create(**validated_data)
 
 # Serializer cho Order
 class OrderSerializer(ModelSerializer):

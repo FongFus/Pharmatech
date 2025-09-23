@@ -1,41 +1,29 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { View, Text, FlatList, StyleSheet, ActivityIndicator, Alert, RefreshControl, TouchableOpacity, StatusBar, Platform, Modal, ScrollView } from 'react-native';
+import { View, Text, FlatList, StyleSheet, ActivityIndicator, Alert, RefreshControl, TouchableOpacity, TouchableNativeFeedback, StatusBar, Platform, Modal, ScrollView } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import * as NavigationBar from 'expo-navigation-bar';
-import { Button as PaperButton, TextInput as PaperTextInput, Card, Checkbox, FAB, Portal, Dialog, Paragraph } from 'react-native-paper';
+import { Button as PaperButton, TextInput as PaperTextInput, Card, Checkbox, FAB, Portal, Dialog, Paragraph, Chip } from 'react-native-paper';
 import { endpoints, authApis } from '../../configs/Apis';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MyUserContext } from '../../configs/MyContexts';
+import Toast from 'react-native-toast-message';
 
 const InventoryManagementScreen = () => {
   const { user } = useContext(MyUserContext);
-  const [inventory, setInventory] = useState([]);
-  const [products, setProducts] = useState([]);
-  const [selectedProduct, setSelectedProduct] = useState('');
-  const [quantity, setQuantity] = useState('');
+  const [tab0Data, setTab0Data] = useState([]);
+  const [tab1Data, setTab1Data] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [page, setPage] = useState(1);
-  const [page_size, setPageSize] = useState(10);
-  const [total_count, setTotalCount] = useState(0);
-  const [next_page, setNextPage] = useState(null);
-  const [previous_page, setPreviousPage] = useState(null);
-  const [search_query, setSearchQuery] = useState('');
+  const [tab0Page, setTab0Page] = useState(1);
+  const [tab1Page, setTab1Page] = useState(1);
+  const [hasMoreTab0, setHasMoreTab0] = useState(true);
+  const [hasMoreTab1, setHasMoreTab1] = useState(true);
+  const [page_size] = useState(10);
   const [searchQueryTab0, setSearchQueryTab0] = useState('');
   const [searchQueryTab1, setSearchQueryTab1] = useState('');
-  const [sortBy, setSortBy] = useState('product_name');
-  const [sortOrder, setSortOrder] = useState('asc');
-  const [detailModalVisible, setDetailModalVisible] = useState(false);
-  const [bulkModalVisible, setBulkModalVisible] = useState(false);
-  const [selectedItem, setSelectedItem] = useState(null);
-  const [selectedItems, setSelectedItems] = useState([]);
-  const [lowStockItems, setLowStockItems] = useState([]);
-  const [bulkAction, setBulkAction] = useState('');
-  const [bulkQuantity, setBulkQuantity] = useState('');
-  const [bulkProducts, setBulkProducts] = useState([]);
   const [tabIndex, setTabIndex] = useState(0);
   const navigation = useNavigation();
 
@@ -47,6 +35,15 @@ const InventoryManagementScreen = () => {
   const [selectedInventoryItems, setSelectedInventoryItems] = useState([]);
   const [updateModalVisible, setUpdateModalVisible] = useState(false);
   const [updateQuantities, setUpdateQuantities] = useState({});
+  // New state to hold inline quantity inputs for each product in tab 1
+  const [inlineQuantities, setInlineQuantities] = useState({});
+  const [categories, setCategories] = useState([]);
+  const [selectedCategory, setSelectedCategory] = useState('');
+  const [selectedInventoryIds, setSelectedInventoryIds] = useState([]);
+  const [total_count, setTotal_count] = useState(0);
+  const [filterLowStock, setFilterLowStock] = useState(false);
+  const [lowStockThreshold] = useState(10);
+  const [filterStatus, setFilterStatus] = useState('all');
 
   if (!user || user.role !== 'distributor') {
     return (
@@ -59,6 +56,39 @@ const InventoryManagementScreen = () => {
     );
   }
 
+  const fetchInventoryStatus = async (tab, page) => {
+    const token = await AsyncStorage.getItem('token');
+    const authApi = authApis(token);
+    try {
+      let url;
+      if (tab === 0) {
+        url = `${endpoints.productsInventoryStatus}?page=${page}&page_size=${page_size}&has_inventory=false`;
+        if (searchQueryTab0) url += `&search=${encodeURIComponent(searchQueryTab0)}`;
+        if (selectedCategory) url += `&category=${selectedCategory}`;
+      } else {
+        url = `${endpoints.inventoryList}?page=${page}&page_size=${page_size}`;
+        if (searchQueryTab1) url += `&search=${encodeURIComponent(searchQueryTab1)}`;
+        // Note: inventory list doesn't have category filter directly, but search on product name
+      }
+      const response = await authApi.get(url);
+      const newData = response.results;
+      setTotal_count(response.count || 0);
+      if (tab === 0) {
+        setTab0Data(prev => page === 1 ? newData : [...prev, ...newData]);
+        setHasMoreTab0(response.next !== null);
+      } else {
+        setTab1Data(prev => page === 1 ? newData : [...prev, ...newData]);
+        setHasMoreTab1(response.next !== null);
+      }
+    } catch (error) {
+      console.error('Fetch inventory status error:', error.response?.data || error.message);
+      Alert.alert('Lỗi', error.response?.data?.detail || 'Không thể tải danh sách sản phẩm tồn kho');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
   useEffect(() => {
     const setNavBarColor = async () => {
       if (Platform.OS === 'android') {
@@ -67,85 +97,49 @@ const InventoryManagementScreen = () => {
     };
     setNavBarColor();
 
-    const fetchProducts = async () => {
-      const token = await AsyncStorage.getItem('token');
-      const authApi = authApis(token);
-      try {
-        const response = await authApi.get(`${endpoints.productsMyProducts}?page_size=1000`);
-        setProducts(response.results);
-      } catch (error) {
-        console.error('Fetch products error:', error.response?.data || error.message);
-        Alert.alert('Lỗi', error.response?.data?.detail || 'Không thể tải danh sách sản phẩm');
-      }
-    };
+    fetchCategories();
+    fetchInventoryStatus(0, 1);
+    fetchInventoryStatus(1, 1);
+  }, []);
 
-    const fetchInventory = async () => {
-      const token = await AsyncStorage.getItem('token');
-      const authApi = authApis(token);
-      try {
-        let url = `${endpoints.inventoryList}?page=${page}&page_size=${page_size}`;
-        if (searchQueryTab1) {
-          url += `&search=${encodeURIComponent(searchQueryTab1)}`;
-        }
-        const response = await authApi.get(url);
-        setInventory(response.results);
-        setTotalCount(response.count);
-        setNextPage(response.next);
-        setPreviousPage(response.previous);
-      } catch (error) {
-        console.error('Fetch inventory error:', error.response?.data || error.message);
-        Alert.alert('Lỗi', error.response?.data?.detail || 'Không thể tải danh sách kho');
-      } finally {
-        setLoading(false);
-        setRefreshing(false);
-      }
-    };
-
-    fetchProducts();
-    fetchInventory();
-    fetchLowStock();
-  }, [page, page_size, searchQueryTab1]);
-
-  const onRefresh = () => {
-    setRefreshing(true);
-    setPage(1);
-  };
-
-  const validateInputs = () => {
-    if (!selectedProduct || !quantity) {
-      Alert.alert('Lỗi', 'Vui lòng chọn sản phẩm và nhập số lượng');
-      return false;
+  useEffect(() => {
+    if (tabIndex === 0) {
+      fetchInventoryStatus(0, 1);
     }
-    if (isNaN(parseInt(quantity)) || parseInt(quantity) < 0) {
-      Alert.alert('Lỗi', 'Số lượng phải là số không âm');
-      return false;
-    }
-    return true;
-  };
+  }, [searchQueryTab0, selectedCategory]);
 
-  const handleAdd = async () => {
-    if (!validateInputs()) return;
-    setLoading(true);
+  useEffect(() => {
+    if (tabIndex === 1) {
+      fetchInventoryStatus(1, 1);
+    }
+  }, [searchQueryTab1, selectedCategory]);
+
+  // Initialize inlineQuantities when tab1Data changes
+  useEffect(() => {
+    const initialQuantities = {};
+    tab1Data.forEach(item => {
+      initialQuantities[item.id] = item.quantity !== undefined ? item.quantity.toString() : '0';
+    });
+    setInlineQuantities(initialQuantities);
+  }, [tab1Data]);
+
+  const fetchCategories = async () => {
     const token = await AsyncStorage.getItem('token');
     const authApi = authApis(token);
     try {
-      const response = await authApi.post(endpoints.inventoryCreate, {
-        product_id: selectedProduct,
-        quantity: parseInt(quantity),
-      });
-      setInventory([...inventory, response]);
-      setSelectedProduct('');
-      setQuantity('');
-      Alert.alert('Thành công', 'Đã thêm vào kho');
+      const response = await authApi.get(endpoints.categoriesList);
+      setCategories(response.results || response);
     } catch (error) {
-      console.error('Add inventory error:', error.response?.data || error.message);
-      Alert.alert('Lỗi', error.response?.data?.detail || 'Thêm thất bại');
-    } finally {
-      setLoading(false);
+      console.error('Fetch categories error:', error);
     }
   };
 
-  const handleUpdate = async (id, new_quantity) => {
+  const onRefresh = () => {
+    setRefreshing(true);
+    fetchInventoryStatus(tabIndex, 1);
+  };
+
+  const handleUpdate = async (id, new_quantity, item) => {
     if (isNaN(parseInt(new_quantity)) || parseInt(new_quantity) < 0) {
       Alert.alert('Lỗi', 'Số lượng phải là số không âm');
       return;
@@ -154,11 +148,19 @@ const InventoryManagementScreen = () => {
     const token = await AsyncStorage.getItem('token');
     const authApi = authApis(token);
     try {
-      const response = await authApi.put(endpoints.inventoryUpdate(id), {
+      await authApi.put(endpoints.inventoryUpdate(id), {
         quantity: parseInt(new_quantity),
+        product_id: item.product.id,
       });
-      setInventory(inventory.map(item => (item.id === id ? response : item)));
-      Alert.alert('Thành công', 'Đã cập nhật kho');
+      // Refetch both tabs to ensure data consistency
+      fetchInventoryStatus(0, 1);
+      fetchInventoryStatus(1, 1);
+      Toast.show({
+        type: 'success',
+        text1: 'Thành công',
+        text2: 'Đã cập nhật kho',
+        position: 'bottom',
+      });
     } catch (error) {
       console.error('Update inventory error:', error.response?.data || error.message);
       Alert.alert('Lỗi', error.response?.data?.detail || 'Cập nhật thất bại');
@@ -179,7 +181,9 @@ const InventoryManagementScreen = () => {
           const authApi = authApis(token);
           try {
             await authApi.delete(endpoints.inventoryDelete(id));
-            setInventory(inventory.filter(item => item.id !== id));
+            // Refetch both tabs to ensure data consistency
+            fetchInventoryStatus(0, 1);
+            fetchInventoryStatus(1, 1);
             Alert.alert('Thành công', 'Đã xóa khỏi kho');
           } catch (error) {
             console.error('Delete inventory error:', error.response?.data || error.message);
@@ -191,115 +195,6 @@ const InventoryManagementScreen = () => {
       },
     ]);
   };
-
-  const fetchInventoryDetail = async (id) => {
-    setLoading(true);
-    const token = await AsyncStorage.getItem('token');
-    const authApi = authApis(token);
-    try {
-      const response = await authApi.get(endpoints.inventoryRead(id));
-      setSelectedItem(response);
-      setDetailModalVisible(true);
-    } catch (error) {
-      console.error('Fetch inventory detail error:', error.response?.data || error.message);
-      Alert.alert('Lỗi', 'Không thể tải chi tiết kho');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchLowStock = async () => {
-    const token = await AsyncStorage.getItem('token');
-    const authApi = authApis(token);
-    try {
-      const response = await authApi.get(endpoints.inventoryLowStock);
-      setLowStockItems(response.results || []);
-    } catch (error) {
-      console.error('Fetch low stock error:', error.response?.data || error.message);
-      const mockLowStock = inventory.filter(item => item.quantity < 10);
-      setLowStockItems(mockLowStock);
-    }
-  };
-
-  const handleBulkCreate = async () => {
-    if (!bulkProducts.length || !bulkQuantity) {
-      Alert.alert('Lỗi', 'Vui lòng chọn sản phẩm và nhập số lượng');
-      return;
-    }
-    setLoading(true);
-    const token = await AsyncStorage.getItem('token');
-    const authApi = authApis(token);
-    try {
-      const data = bulkProducts.map(productId => ({
-        product_id: productId,
-        quantity: parseInt(bulkQuantity),
-      }));
-      await authApi.post(endpoints.inventoryBulkCreate, data);
-      Alert.alert('Thành công', 'Đã thêm hàng loạt vào kho');
-      setBulkModalVisible(false);
-      setBulkProducts([]);
-      setBulkQuantity('');
-      onRefresh();
-    } catch (error) {
-      console.error('Bulk create error:', error.response?.data || error.message);
-      Alert.alert('Lỗi', 'Thêm hàng loạt thất bại');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleBulkDelete = async () => {
-    if (!selectedItems.length) {
-      Alert.alert('Lỗi', 'Vui lòng chọn ít nhất một mục');
-      return;
-    }
-    Alert.alert('Xác nhận', `Bạn có chắc muốn xóa ${selectedItems.length} mục?`, [
-      { text: 'Hủy', style: 'cancel' },
-      {
-        text: 'Xóa',
-        style: 'destructive',
-        onPress: async () => {
-          setLoading(true);
-          const token = await AsyncStorage.getItem('token');
-          const authApi = authApis(token);
-          try {
-            await authApi.delete(endpoints.inventoryBulkDelete, { ids: selectedItems });
-            setInventory(inventory.filter(item => !selectedItems.includes(item.id)));
-            Alert.alert('Thành công', 'Đã xóa hàng loạt');
-            setSelectedItems([]);
-          } catch (error) {
-            console.error('Bulk delete error:', error.response?.data || error.message);
-            Alert.alert('Lỗi', 'Xóa hàng loạt thất bại');
-          } finally {
-            setLoading(false);
-          }
-        },
-      },
-    ]);
-  };
-
-  const toggleItemSelection = (id) => {
-    setSelectedItems(prev =>
-      prev.includes(id) ? prev.filter(itemId => itemId !== id) : [...prev, id]
-    );
-  };
-
-  const toggleBulkProductSelection = (id) => {
-    setBulkProducts(prev =>
-      prev.includes(id) ? prev.filter(itemId => itemId !== id) : [...prev, id]
-    );
-  };
-
-  const openBulkModal = (action) => {
-    setBulkAction(action);
-    setBulkModalVisible(true);
-  };
-
-  // Tính toán danh sách sản phẩm chưa có trong kho
-  const productsNotInInventory = products.filter(product => !inventory.some(inv => inv.product_id === product.id));
-  const filteredProductsNotInInventory = productsNotInInventory.filter(product =>
-    product.name && product.name.toLowerCase().includes(searchQueryTab0.toLowerCase())
-  );
 
   // Tick chọn sản phẩm chưa có trong kho
   const toggleNewProductSelection = (id) => {
@@ -350,7 +245,9 @@ const InventoryManagementScreen = () => {
           product_id: productId,
           quantity: parseInt(addQuantities[productId]),
         });
-        setInventory([...inventory, response]);
+        // Refresh both tabs to ensure data consistency
+        fetchInventoryStatus(0, 1);
+        fetchInventoryStatus(1, 1);
       } else {
         // Thêm nhiều sản phẩm
         const data = selectedNewProducts.map(id => ({
@@ -358,12 +255,19 @@ const InventoryManagementScreen = () => {
           quantity: parseInt(addQuantities[id]),
         }));
         await authApi.post(endpoints.inventoryBulkCreate, data);
-        onRefresh();
+        // Refresh both tabs
+        fetchInventoryStatus(0, 1);
+        fetchInventoryStatus(1, 1);
       }
       setAddModalVisible(false);
       setSelectedNewProducts([]);
       setAddQuantities({});
-      Alert.alert('Thành công', 'Đã thêm vào kho');
+      Toast.show({
+        type: 'success',
+        text1: 'Thành công',
+        text2: 'Đã thêm vào kho',
+        position: 'bottom',
+      });
     } catch (error) {
       Alert.alert('Lỗi', 'Thêm vào kho thất bại');
     } finally {
@@ -379,7 +283,7 @@ const InventoryManagementScreen = () => {
     }
     const initialQuantities = {};
     selectedInventoryItems.forEach(id => {
-      const item = inventory.find(inv => inv.id === id);
+      const item = tab1Data.find(inv => inv.id === id);
       initialQuantities[id] = item ? item.quantity.toString() : '';
     });
     setUpdateQuantities(initialQuantities);
@@ -409,8 +313,15 @@ const InventoryManagementScreen = () => {
       setUpdateModalVisible(false);
       setSelectedInventoryItems([]);
       setUpdateQuantities({});
-      onRefresh();
-      Alert.alert('Thành công', 'Đã cập nhật số lượng');
+      // Refetch both tabs to ensure data consistency
+      fetchInventoryStatus(0, 1);
+      fetchInventoryStatus(1, 1);
+      Toast.show({
+        type: 'success',
+        text1: 'Thành công',
+        text2: 'Đã cập nhật số lượng',
+        position: 'bottom',
+      });
     } catch (error) {
       Alert.alert('Lỗi', 'Cập nhật số lượng thất bại');
     } finally {
@@ -436,7 +347,9 @@ const InventoryManagementScreen = () => {
           try {
             await authApi.delete(endpoints.inventoryBulkDelete, { ids: selectedInventoryItems });
             setSelectedInventoryItems([]);
-            onRefresh();
+            // Refetch both tabs to ensure data consistency
+            fetchInventoryStatus(0, 1);
+            fetchInventoryStatus(1, 1);
             Alert.alert('Thành công', 'Đã xóa khỏi kho');
           } catch (error) {
             Alert.alert('Lỗi', 'Xóa khỏi kho thất bại');
@@ -448,94 +361,118 @@ const InventoryManagementScreen = () => {
     ]);
   };
 
-  const renderItem = ({ item }) => (
-    <Card style={styles.card} elevation={3}>
-      <Card.Content>
-        <TouchableOpacity onPress={() => fetchInventoryDetail(item.id)} style={styles.cardTouchable}>
-          <View style={styles.cardHeader}>
-            <Checkbox
-              status={selectedItems.includes(item.id) ? 'checked' : 'unchecked'}
-              onPress={() => toggleItemSelection(item.id)}
-              color="#0052CC"
-            />
-            <View style={styles.cardTitleContainer}>
-              <Text style={styles.title}>{item.product_name}</Text>
-              <View style={styles.statusContainer}>
-                <View
-                  style={[
-                    styles.statusDot,
-                    { backgroundColor: item.quantity < 10 ? '#FF6B35' : '#00A86B' },
-                  ]}
-                />
-                <Text style={[styles.quantity, { color: item.quantity < 10 ? '#FF6B35' : '#333' }]}>
-                  Số lượng: {item.quantity}
-                </Text>
-              </View>
+  const renderItem = ({ item }) => {
+    const formatDate = (dateString) => {
+      if (!dateString) return '';
+      const date = new Date(dateString);
+      return date.toLocaleDateString('vi-VN'); // DD/MM/YYYY
+    };
+
+    const formatPrice = (price) => {
+      return parseFloat(price).toLocaleString('vi-VN') + ' VND';
+    };
+
+    const getStockStatus = (quantity) => {
+      if (quantity === 0) return { text: 'Hết hàng', color: '#DC2626' };
+      if (quantity > 0 && quantity < 10) return { text: `Tồn kho thấp (${quantity})`, color: '#FF6B35' };
+      return { text: 'Kho có hàng', color: '#00A86B' };
+    };
+
+    const stockStatus = getStockStatus(item.quantity);
+
+    return (
+      <Card style={styles.card} elevation={3}>
+        <Card.Content>
+          <View style={styles.cardTouchable}>
+            <Text style={styles.title}>{item.product.name}</Text>
+            <Text style={styles.description}>{item.product.description}</Text>
+            <Text style={styles.infoText}>Giá: {formatPrice(item.product.price)}</Text>
+            <Text style={styles.infoText}>Danh mục: {item.product.category_name}</Text>
+            <Text style={styles.infoText}>Nhà phân phối: {item.product.distributor_name}</Text>
+            {item.product.created_at && <Text style={styles.infoText}>Ngày tạo: {formatDate(item.product.created_at)}</Text>}
+            <View style={[styles.statusBadge, { backgroundColor: stockStatus.color }]}>
+              <Text style={styles.statusText}>{stockStatus.text}</Text>
             </View>
           </View>
-        </TouchableOpacity>
-        <PaperTextInput
-          label="Cập nhật số lượng"
-          keyboardType="numeric"
-          onSubmitEditing={e => handleUpdate(item.id, e.nativeEvent.text)}
-          style={styles.input}
-          mode="outlined"
-          dense
-          theme={{ colors: { primary: '#0052CC' } }}
-          accessibilityLabel={`Cập nhật số lượng cho ${item.product_name}`}
-        />
-        <View style={styles.cardActions}>
-          <PaperButton
-            mode="contained"
-            onPress={() => handleDelete(item.id)}
-            style={styles.deleteButton}
-            buttonColor="#FF6B35"
-            textColor="#FFFFFF"
-            accessibilityLabel={`Xóa ${item.product_name}`}
-          >
-            Xóa
-          </PaperButton>
-        </View>
-      </Card.Content>
-    </Card>
-  );
+          <Text style={styles.infoText}>Số lượng hiện tại: {item.quantity}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8 }}>
+            <PaperTextInput
+              label="Số lượng mới"
+              keyboardType="numeric"
+              value={inlineQuantities[item.id]}
+              onChangeText={text => setInlineQuantities(prev => ({ ...prev, [item.id]: text }))}
+              style={[styles.input, { flex: 1, marginRight: 8 }]}
+              mode="outlined"
+              dense
+              theme={{ colors: { primary: '#0052CC' } }}
+              accessibilityLabel={`Nhập số lượng mới cho ${item.product.name}`}
+            />
+          </View>
+          <Card.Actions style={styles.cardActions}>
+            <PaperButton
+              mode="contained"
+              onPress={() => handleUpdate(item.id, inlineQuantities[item.id], item)}
+              icon="content-save"
+              style={styles.actionButton}
+              buttonColor="#0052CC"
+              textColor="#FFFFFF"
+              accessibilityLabel={`Lưu số lượng cho ${item.product.name}`}
+            >
+              Lưu
+            </PaperButton>
+            <PaperButton
+              mode="contained"
+              onPress={() => handleDelete(item.id)}
+              icon="delete"
+              style={styles.actionButton}
+              buttonColor="#FF6B35"
+              textColor="#FFFFFF"
+              accessibilityLabel={`Xóa ${item.product.name}`}
+            >
+              Xóa
+            </PaperButton>
+          </Card.Actions>
+        </Card.Content>
+      </Card>
+    );
+  };
 
-  const renderProductItem = ({ item }) => (
-    <Card style={styles.card} elevation={3}>
-      <Card.Content>
-        <View style={styles.cardTitleContainer}>
-          <Text style={styles.title}>{item.name}</Text>
-          <Text style={styles.productDescription}>{item.description}</Text>
-        </View>
-        <View style={styles.cardActions}>
-          <PaperButton
-            mode="contained"
-            onPress={() => {
-              setSelectedProduct(item.id.toString());
-              setQuantity('0');
-            }}
-            style={styles.addToInventoryButton}
-            buttonColor="#0052CC"
-            textColor="#FFFFFF"
-            accessibilityLabel={`Thêm ${item.name} vào kho`}
-          >
-            Thêm vào kho
-          </PaperButton>
-        </View>
-      </Card.Content>
-    </Card>
-  );
+  const renderProductItem = ({ item }) => {
+    const formatDate = (dateString) => {
+      if (!dateString) return '';
+      const date = new Date(dateString);
+      return date.toLocaleDateString('vi-VN'); // DD/MM/YYYY
+    };
 
-  const renderBulkProductItem = ({ item }) => (
-    <View style={styles.bulkProductItem}>
-      <Checkbox
-        status={bulkProducts.includes(item.id.toString()) ? 'checked' : 'unchecked'}
-        onPress={() => toggleBulkProductSelection(item.id.toString())}
-        color="#0052CC"
-      />
-      <Text style={styles.bulkProductText}>{item.name}</Text>
-    </View>
-  );
+    const formatPrice = (price) => {
+      return parseFloat(price).toLocaleString('vi-VN') + ' VND';
+    };
+
+    return (
+      <Card style={styles.card} elevation={3}>
+        <Card.Content>
+          <TouchableOpacity onPress={() => toggleNewProductSelection(item.id)} activeOpacity={0.7}>
+            <View style={styles.cardTouchable}>
+              <Text style={styles.title}>{item.name}</Text>
+              <Text style={styles.description}>{item.description}</Text>
+              <Text style={styles.infoText}>Giá: {formatPrice(item.price)}</Text>
+              <Text style={styles.infoText}>Danh mục: {item.category_name}</Text>
+              <Text style={styles.infoText}>Nhà phân phối: {item.distributor_name}</Text>
+              <Text style={styles.infoText}>Ngày tạo: {formatDate(item.created_at)}</Text>
+            </View>
+            <Checkbox
+              status={selectedNewProducts.includes(item.id) ? 'checked' : 'unchecked'}
+              onPress={() => toggleNewProductSelection(item.id)}
+              color="#0052CC"
+              accessibilityLabel={`Chọn sản phẩm ${item.name}`}
+            />
+          </TouchableOpacity>
+        </Card.Content>
+      </Card>
+    );
+  };
+
+
 
   const totalPages = Math.ceil(total_count / page_size);
   const pageNumbers = Array.from({ length: totalPages }, (_, i) => i + 1);
@@ -582,6 +519,52 @@ const InventoryManagementScreen = () => {
             left={<PaperTextInput.Icon icon="magnify" color="#0052CC" />}
             accessibilityLabel="Tìm kiếm sản phẩm"
           />
+          <View style={styles.filterChipsContainer}>
+            <Chip
+              mode={filterLowStock ? 'flat' : 'outlined'}
+              selected={filterLowStock}
+              onPress={() => setFilterLowStock(!filterLowStock)}
+              style={styles.filterChip}
+            >
+              Tồn kho thấp ({'<'}{lowStockThreshold})
+            </Chip>
+            <Chip
+              mode={filterStatus === 'all' ? 'flat' : 'outlined'}
+              selected={filterStatus === 'all'}
+              onPress={() => setFilterStatus('all')}
+              style={styles.filterChip}
+            >
+              Tất cả
+            </Chip>
+            <Chip
+              mode={filterStatus === 'added' ? 'flat' : 'outlined'}
+              selected={filterStatus === 'added'}
+              onPress={() => setFilterStatus('added')}
+              style={styles.filterChip}
+            >
+              Đã thêm vào kho
+            </Chip>
+            <Chip
+              mode={filterStatus === 'not_added' ? 'flat' : 'outlined'}
+              selected={filterStatus === 'not_added'}
+              onPress={() => setFilterStatus('not_added')}
+              style={styles.filterChip}
+            >
+              Chưa thêm vào kho
+            </Chip>
+          </View>
+          <View style={styles.pickerContainer}>
+            <Picker
+              selectedValue={selectedCategory}
+              onValueChange={(itemValue) => setSelectedCategory(itemValue)}
+              style={styles.picker}
+            >
+              <Picker.Item label="Tất cả danh mục" value="" />
+              {categories.map(category => (
+                <Picker.Item key={category.id} label={category.name} value={category.id} />
+              ))}
+            </Picker>
+          </View>
           <View style={styles.bulkOperations}>
             <PaperButton
               mode="contained"
@@ -604,7 +587,7 @@ const InventoryManagementScreen = () => {
             value={searchQueryTab1}
             onChangeText={text => {
               setSearchQueryTab1(text);
-              setPage(1);
+              setTab1Page(1);
             }}
             style={styles.input}
             mode="outlined"
@@ -613,88 +596,114 @@ const InventoryManagementScreen = () => {
             left={<PaperTextInput.Icon icon="magnify" color="#0052CC" />}
             accessibilityLabel="Tìm kiếm sản phẩm"
           />
-          <View style={styles.bulkOperations}>
-            <PaperButton
-              mode="outlined"
-              onPress={handleBulkDeleteInventory}
-              style={styles.bulkButton}
-              textColor="#FF6B35"
-              accessibilityLabel="Xóa khỏi kho"
+          <View style={styles.filterChipsContainer}>
+            <Chip
+              mode={filterLowStock ? 'flat' : 'outlined'}
+              selected={filterLowStock}
+              onPress={() => setFilterLowStock(!filterLowStock)}
+              style={styles.filterChip}
             >
-              Xóa khỏi kho
-            </PaperButton>
-            <PaperButton
-              mode="outlined"
-              onPress={openUpdateModal}
-              style={styles.bulkButton}
-              textColor="#0052CC"
-              accessibilityLabel="Cập nhật số lượng"
+              Tồn kho thấp ({'<'}{lowStockThreshold})
+            </Chip>
+            <Chip
+              mode={filterStatus === 'all' ? 'flat' : 'outlined'}
+              selected={filterStatus === 'all'}
+              onPress={() => setFilterStatus('all')}
+              style={styles.filterChip}
             >
-              Cập nhật số lượng
-            </PaperButton>
+              Tất cả
+            </Chip>
+            <Chip
+              mode={filterStatus === 'added' ? 'flat' : 'outlined'}
+              selected={filterStatus === 'added'}
+              onPress={() => setFilterStatus('added')}
+              style={styles.filterChip}
+            >
+              Đã thêm vào kho
+            </Chip>
+            <Chip
+              mode={filterStatus === 'not_added' ? 'flat' : 'outlined'}
+              selected={filterStatus === 'not_added'}
+              onPress={() => setFilterStatus('not_added')}
+              style={styles.filterChip}
+            >
+              Chưa thêm vào kho
+            </Chip>
+          </View>
+          <View style={styles.pickerContainer}>
+            <Picker
+              selectedValue={selectedCategory}
+              onValueChange={(itemValue) => setSelectedCategory(itemValue)}
+              style={styles.picker}
+            >
+              <Picker.Item label="Tất cả danh mục" value="" />
+              {categories.map(category => (
+                <Picker.Item key={category.id} label={category.name} value={category.id} />
+              ))}
+            </Picker>
           </View>
         </>
       )}
     </View>
   );
 
-  const renderFooter = () => (
-    <View style={styles.footerContainer}>
-      <View style={styles.pagination}>
-        <PaperButton
-          mode="contained"
-          onPress={() => setPage(page > 1 ? page - 1 : 1)}
-          disabled={!previous_page}
-          style={styles.paginationButton}
-          buttonColor={previous_page ? '#0052CC' : '#CCCCCC'}
-          textColor="#FFFFFF"
-        >
-          Trang trước
-        </PaperButton>
-        <View style={styles.pageNumbers}>
-          {pageNumbers.map(num => (
-            <TouchableOpacity
-              key={num}
-              onPress={() => setPage(num)}
-              style={[styles.pageNumber, page === num && styles.activePageNumber]}
-            >
-              <Text style={[styles.pageNumberText, page === num && styles.activePageNumberText]}>
-                {num}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-        <PaperButton
-          mode="contained"
-          onPress={() => setPage(page + 1)}
-          disabled={!next_page}
-          style={styles.paginationButton}
-          buttonColor={next_page ? '#0052CC' : '#CCCCCC'}
-          textColor="#FFFFFF"
-        >
-          Trang sau
-        </PaperButton>
-      </View>
-    </View>
-  );
+  const loadMore = () => {
+    if (tabIndex === 0 && hasMoreTab0 && !loading) {
+      const nextPage = tab0Page + 1;
+      setTab0Page(nextPage);
+      fetchInventoryStatus(0, nextPage);
+    } else if (tabIndex === 1 && hasMoreTab1 && !loading) {
+      const nextPage = tab1Page + 1;
+      setTab1Page(nextPage);
+      fetchInventoryStatus(1, nextPage);
+    }
+  };
 
-  const currentData = tabIndex === 0 ? filteredProductsNotInInventory : sortedInventory;
+  const renderFooter = () => {
+    if (loading) {
+      return (
+        <View style={styles.footerContainer}>
+          <ActivityIndicator size="small" color="#0052CC" />
+        </View>
+      );
+    }
+    return null;
+  };
+
+  const currentData = tabIndex === 0 ? tab0Data : tab1Data;
+  // Apply advanced filters client-side
+  let filteredData = currentData.filter(item => {
+    // Filter by low stock if enabled
+    if (filterLowStock && item.quantity >= lowStockThreshold) {
+      return false;
+    }
+    // Filter by status
+    if (filterStatus === 'added' && tabIndex === 0) {
+      // tab 0 is products not in inventory, so no items should be shown if filter is 'added'
+      return false;
+    }
+    if (filterStatus === 'not_added' && tabIndex === 1) {
+      // tab 1 is products in inventory, so no items should be shown if filter is 'not_added'
+      return false;
+    }
+    return true;
+  });
   const currentRenderItem = tabIndex === 0 ? renderProductItem : renderItem;
   const currentEmptyText = tabIndex === 0 ? 'Không có sản phẩm chưa có kho' : 'Kho trống';
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="light-content" backgroundColor="#0052CC" />
+      {renderHeader()}
       <FlatList
-        data={currentData}
+        data={filteredData}
         renderItem={currentRenderItem}
-        keyExtractor={item => item.id.toString()}
-        ListHeaderComponent={renderHeader}
+        keyExtractor={item => item.id ? item.id.toString() : item.product_name || item.name || Math.random().toString()}
         ListFooterComponent={renderFooter}
         ListEmptyComponent={<Text style={styles.emptyListText}>{currentEmptyText}</Text>}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         style={styles.container}
-        contentContainerStyle={currentData.length === 0 && styles.emptyListContainer}
+        contentContainerStyle={filteredData.length === 0 && styles.emptyListContainer}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
       />
@@ -707,9 +716,9 @@ const InventoryManagementScreen = () => {
         >
           <Dialog.Title style={styles.modalHeader}>Nhập số lượng cho sản phẩm</Dialog.Title>
           <Dialog.Content>
-            <ScrollView>
+            <KeyboardAwareScrollView>
               {selectedNewProducts.map(id => {
-                const product = products.find(p => p.id === id);
+                const product = tab0Data.find(p => p.id === id);
                 return (
                   <View key={id} style={{ marginBottom: 12 }}>
                     <Text style={styles.title}>{product?.name}</Text>
@@ -726,7 +735,7 @@ const InventoryManagementScreen = () => {
                   </View>
                 );
               })}
-            </ScrollView>
+            </KeyboardAwareScrollView>
           </Dialog.Content>
           <Dialog.Actions>
             <PaperButton
@@ -739,13 +748,15 @@ const InventoryManagementScreen = () => {
             <PaperButton
               onPress={handleAddToInventory}
               textColor="#0052CC"
-              accessibilityLabel="Xác nhận thêm vào kho"
+              accessibilityLabel="Thêm"
             >
-              Xác nhận
+              Thêm
             </PaperButton>
           </Dialog.Actions>
         </Dialog>
-        {/* Modal cập nhật số lượng cho nhiều sản phẩm */}
+      </Portal>
+      {/* Modal cập nhật số lượng cho nhiều sản phẩm */}
+      <Portal>
         <Dialog
           visible={updateModalVisible}
           onDismiss={() => setUpdateModalVisible(false)}
@@ -753,14 +764,14 @@ const InventoryManagementScreen = () => {
         >
           <Dialog.Title style={styles.modalHeader}>Cập nhật số lượng</Dialog.Title>
           <Dialog.Content>
-            <ScrollView>
+            <KeyboardAwareScrollView>
               {selectedInventoryItems.map(id => {
-                const item = inventory.find(inv => inv.id === id);
+                const item = tab1Data.find(inv => inv.id === id);
                 return (
                   <View key={id} style={{ marginBottom: 12 }}>
-                    <Text style={styles.title}>{item?.product_name}</Text>
+                    <Text style={styles.title}>{item?.product.name}</Text>
                     <PaperTextInput
-                      label="Số lượng"
+                      label="Số lượng mới"
                       value={updateQuantities[id]}
                       keyboardType="numeric"
                       onChangeText={text => setUpdateQuantities(q => ({ ...q, [id]: text }))}
@@ -772,7 +783,7 @@ const InventoryManagementScreen = () => {
                   </View>
                 );
               })}
-            </ScrollView>
+            </KeyboardAwareScrollView>
           </Dialog.Content>
           <Dialog.Actions>
             <PaperButton
@@ -785,21 +796,14 @@ const InventoryManagementScreen = () => {
             <PaperButton
               onPress={handleUpdateInventory}
               textColor="#0052CC"
-              accessibilityLabel="Xác nhận cập nhật"
+              accessibilityLabel="Cập nhật"
             >
-              Xác nhận
+              Cập nhật
             </PaperButton>
           </Dialog.Actions>
         </Dialog>
       </Portal>
-      <FAB
-        icon="plus"
-        style={styles.fab}
-        onPress={() => openBulkModal('create')}
-        color="#FFFFFF"
-        theme={{ colors: { accent: '#0052CC' } }}
-        accessibilityLabel="Thêm hàng loạt nhanh"
-      />
+      <Toast />
     </SafeAreaView>
   );
 };
@@ -894,8 +898,9 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     marginTop: 12,
   },
-  deleteButton: {
-    paddingVertical: 8,
+  actionButton: {
+    marginLeft: 8,
+    paddingVertical: 6,
     borderRadius: 8,
   },
   lowStockBanner: {
@@ -1129,6 +1134,60 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
     color: '#0052CC',
+  },
+  statusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    alignSelf: 'flex-start',
+    marginBottom: 8,
+  },
+  statusTextInInventory: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#FFFFFF',
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
+  },
+  statusTextNotInInventory: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#FFFFFF',
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
+  },
+  filterChipsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginBottom: 16,
+  },
+  filterChip: {
+    marginRight: 8,
+    marginBottom: 8,
+  },
+  filterChipText: {
+    color: '#6B7280',
+  },
+  filterChipTextSelected: {
+    color: '#FFFFFF',
+  },
+  infoText: {
+    fontSize: 14,
+    fontWeight: '400',
+    color: '#6B7280',
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
+    marginBottom: 4,
+  },
+  statusText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#FFFFFF',
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
+  },
+  description: {
+    fontSize: 14,
+    fontWeight: '400',
+    color: '#6B7280',
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
+    marginBottom: 8,
   },
 });
 

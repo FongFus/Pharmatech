@@ -123,18 +123,6 @@ class CartItem(models.Model):
     def __str__(self):
         return f"{self.quantity} x {self.product.name}"
 
-    @transaction.atomic
-    def save(self, *args, **kwargs):
-        """Kiểm tra và cập nhật tồn kho trong transaction để tránh race conditions."""
-        inventory = Inventory.objects.select_for_update().get(
-            product=self.product, distributor=self.product.distributor
-        )
-        if self.quantity > inventory.quantity:
-            raise ValueError(f"Cannot add {self.quantity} items, only {inventory.quantity} in stock.")
-        inventory.quantity = F('quantity') - self.quantity
-        inventory.save()
-        super().save(*args, **kwargs)
-
 class Discount(models.Model):
     code = models.CharField(max_length=50, unique=True)
     description = models.TextField(blank=True, null=True)

@@ -9,7 +9,6 @@ import {
   ActivityIndicator,
   TextInput,
   Alert,
-  TouchableNativeFeedback,
   TouchableOpacity,
   RefreshControl,
 } from 'react-native';
@@ -20,7 +19,6 @@ import { MyUserContext } from '../../configs/MyContexts';
 import moment from 'moment';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { KeyboardAvoidingView } from 'react-native';
-import * as NavigationBar from 'expo-navigation-bar';
 
 const ReviewScreen = () => {
   const [reviews, setReviews] = useState([]);
@@ -35,7 +33,6 @@ const ReviewScreen = () => {
   const user = useContext(MyUserContext);
 
   useEffect(() => {
-    // Navigation bar color setting removed due to edge-to-edge compatibility
     fetchReviews();
   }, [productId]);
 
@@ -77,7 +74,6 @@ const ReviewScreen = () => {
     }
   };
 
-  // Fix for hasReviewed logic: ensure user and user.id exist and compare correctly
   const hasReviewed = React.useMemo(() => {
     if (!user || !user.id) return false;
     return reviews.some(r => r.user_details && r.user_details.id === user.id);
@@ -142,10 +138,11 @@ const ReviewScreen = () => {
           key={i}
           disabled={!interactive}
           onPress={() => onStarPress && onStarPress(i)}
+          style={styles.starWrapper}
         >
           <Text
             style={{
-              fontSize: interactive ? 30 : 20,
+              fontSize: interactive ? 28 : 20,
               color: i <= rating ? '#FFD700' : '#ccc',
             }}
           >
@@ -154,14 +151,16 @@ const ReviewScreen = () => {
         </TouchableOpacity>
       );
     }
-    return <View style={{ flexDirection: 'row' }}>{stars}</View>;
+    return <View style={styles.starContainer}>{stars}</View>;
   };
 
   const renderItem = ({ item }) => (
     <View style={styles.item}>
-      {renderStars(item.rating)}
+      <Text style={styles.username}>{item.user_details.full_name} ({item.user_details.username})</Text>
+      <View style={styles.starContainer}>
+        {renderStars(item.rating)}
+      </View>
       {item.comment ? <Text style={styles.comment}>{item.comment}</Text> : null}
-            <Text style={styles.username}>{item.user_details.full_name} ({item.user_details.username})</Text>
       <Text style={styles.createdAt}>{moment(item.created_at).fromNow()}</Text>
       {item.replies && item.replies.length > 0 && (
         <View style={styles.repliesContainer}>
@@ -179,176 +178,163 @@ const ReviewScreen = () => {
 
   const renderFooter = () => {
     if (!loadingMore) return null;
-    return <ActivityIndicator size="small" color="#007AFF" />;
+    return (
+      <View style={styles.footerLoading}>
+        <ActivityIndicator size="small" color="#007AFF" />
+      </View>
+    );
   };
+
+  const renderHeader = () => (
+    <View>
+      <Text style={styles.header}>Đánh giá sản phẩm</Text>
+      {hasReviewed ? (
+        <Text style={styles.warning}>Bạn đã đánh giá sản phẩm này</Text>
+      ) : (
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 40 : 0}
+        >
+          <View style={styles.form}>
+            <View style={styles.starContainer}>
+              {renderStars(rating, true, setRating)}
+            </View>
+            <TextInput
+              style={styles.input}
+              placeholder="Viết nhận xét..."
+              placeholderTextColor="#999"
+              value={comment}
+              onChangeText={setComment}
+              multiline
+              textAlignVertical="top"
+            />
+            <TouchableOpacity style={styles.button} onPress={handleSubmitReview}>
+              <Text style={styles.buttonText}>Gửi</Text>
+            </TouchableOpacity>
+          </View>
+        </KeyboardAvoidingView>
+      )}
+    </View>
+  );
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#007AFF" />
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar backgroundColor="#007AFF" barStyle="light-content" />
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#007AFF" />
+          <Text style={styles.loadingText}>Đang tải...</Text>
+        </View>
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar
-        barStyle={Platform.OS === 'ios' ? 'dark-content' : 'light-content'}
-        backgroundColor={Platform.OS === 'ios' ? '#FFFFFF' : '#007AFF'}
+    <SafeAreaView style={styles.safeArea}>
+      <StatusBar backgroundColor="#007AFF" barStyle="light-content" />
+      <FlatList
+        data={reviews}
+        renderItem={renderItem}
+        keyExtractor={(item) => item.id.toString()}
+        ListHeaderComponent={renderHeader}
+        ListEmptyComponent={
+          <Text style={styles.emptyText}>Chưa có đánh giá</Text>
+        }
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+        }
+        onEndReached={onEndReached}
+        onEndReachedThreshold={0.5}
+        ListFooterComponent={renderFooter}
+        style={styles.list}
       />
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 40 : 0}
-      >
-        <View style={{ flex: 1 }}>
-          <Text style={styles.header}>Đánh giá sản phẩm</Text>
-          {hasReviewed ? (
-            <Text style={styles.warning}>Bạn đã đánh giá sản phẩm này</Text>
-          ) : (
-            <View style={styles.form}>
-              <View style={styles.starContainer}>
-                {renderStars(rating, true, setRating)}
-              </View>
-              <TextInput
-                style={styles.input}
-                placeholder="Viết nhận xét..."
-                value={comment}
-                onChangeText={setComment}
-                multiline
-                textAlignVertical="top"
-              />
-              {Platform.select({
-                android: (
-                  <TouchableNativeFeedback
-                    onPress={handleSubmitReview}
-                    background={TouchableNativeFeedback.SelectableBackground()}
-                  >
-                    <View style={styles.button}>
-                      <Text style={styles.buttonText}>Gửi</Text>
-                    </View>
-                  </TouchableNativeFeedback>
-                ),
-                ios: (
-                  <TouchableOpacity onPress={handleSubmitReview}>
-                    <View style={styles.button}>
-                      <Text style={styles.buttonText}>Gửi</Text>
-                    </View>
-                  </TouchableOpacity>
-                ),
-              })}
-            </View>
-          )}
-          <FlatList
-            data={reviews}
-            renderItem={renderItem}
-            keyExtractor={(item) => item.id.toString()}
-            ListEmptyComponent={
-              <Text style={styles.emptyText}>Chưa có đánh giá</Text>
-            }
-            refreshControl={
-              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-            }
-            onEndReached={onEndReached}
-            onEndReachedThreshold={0.5}
-            ListFooterComponent={renderFooter}
-            keyboardShouldPersistTaps="handled"
-            style={{ flex: 1 }}
-          />
-        </View>
-      </KeyboardAvoidingView>
-      {/* TODO: Test on real Android device to ensure UI consistency and navigation bar color. */}
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
+  safeArea: {
     flex: 1,
     backgroundColor: '#FFFFFF',
+  },
+  list: {
+    flex: 1,
     padding: 16,
   },
   header: {
     fontSize: 24,
-    fontFamily: Platform.select({ ios: 'Helvetica', android: 'Roboto' }),
     fontWeight: '700',
     color: '#007AFF',
     marginBottom: 16,
+    textAlign: 'center',
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
   },
   form: {
-    marginBottom: 16,
+    marginBottom: 20,
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#ddd',
   },
   starContainer: {
-    marginBottom: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  starWrapper: {
+    marginRight: 8,
   },
   input: {
-    height: 80,
-    borderColor: 'gray',
+    height: 100,
+    borderColor: '#ddd',
     borderWidth: 1,
-    marginBottom: 16,
-    paddingHorizontal: 10,
-    fontFamily: Platform.select({ ios: 'Helvetica', android: 'Roboto' }),
-    fontWeight: '400',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    fontSize: 16,
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
+    backgroundColor: '#fff',
+    marginBottom: 12,
     textAlignVertical: 'top',
-    width: '100%',
+  },
+  button: {
+    backgroundColor: '#007AFF',
+    padding: 15,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  buttonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
   },
   item: {
     padding: 12,
     borderBottomWidth: 1,
-    borderBottomColor: 'gray',
+    borderBottomColor: '#eee',
     marginBottom: 12,
-  },
-  comment: {
-    fontSize: 16,
-    fontFamily: Platform.select({ ios: 'Helvetica', android: 'Roboto' }),
-    fontWeight: '400',
-    marginVertical: 4,
   },
   username: {
     fontSize: 14,
-    fontFamily: Platform.select({ ios: 'Helvetica-Oblique', android: 'Roboto-Italic' }),
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 4,
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
+  },
+  comment: {
+    fontSize: 16,
     fontWeight: '400',
-    color: '#666',
+    color: '#333',
+    marginVertical: 8,
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
   },
   createdAt: {
     fontSize: 12,
-    fontFamily: Platform.select({ ios: 'Helvetica', android: 'Roboto' }),
     fontWeight: '400',
     color: '#999',
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  emptyText: {
-    fontSize: 16,
-    fontFamily: Platform.select({ ios: 'Helvetica-Oblique', android: 'Roboto-Italic' }),
-    fontWeight: '400',
-    color: 'red',
-    textAlign: 'center',
-    marginTop: 20,
-  },
-  warning: {
-    fontSize: 16,
-    fontFamily: Platform.select({ ios: 'Helvetica-Oblique', android: 'Roboto-Italic' }),
-    fontWeight: '400',
-    color: 'red',
-    textAlign: 'center',
-    marginTop: 20,
-    marginBottom: 20,
-  },
-  button: {
-    backgroundColor: '#007AFF',
-    paddingVertical: 12,
-    borderRadius: 4,
-    alignItems: 'center',
-    width: '100%',
-  },
-  buttonText: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: '600',
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
   },
   repliesContainer: {
     marginTop: 8,
@@ -361,21 +347,55 @@ const styles = StyleSheet.create({
   },
   replyUser: {
     fontSize: 14,
-    fontFamily: Platform.select({ ios: 'Helvetica-Bold', android: 'Roboto-Bold' }),
     fontWeight: '600',
     color: '#007AFF',
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
   },
   replyComment: {
     fontSize: 14,
-    fontFamily: Platform.select({ ios: 'Helvetica', android: 'Roboto' }),
     fontWeight: '400',
+    color: '#333',
     marginVertical: 2,
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
   },
   replyCreatedAt: {
     fontSize: 12,
-    fontFamily: Platform.select({ ios: 'Helvetica', android: 'Roboto' }),
     fontWeight: '400',
     color: '#999',
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#333',
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
+  },
+  emptyText: {
+    fontSize: 16,
+    fontWeight: '400',
+    color: '#999',
+    textAlign: 'center',
+    marginTop: 20,
+    fontStyle: 'italic',
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
+  },
+  warning: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#F44336',
+    textAlign: 'center',
+    marginVertical: 20,
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'Roboto',
+  },
+  footerLoading: {
+    padding: 16,
+    alignItems: 'center',
   },
 });
 
