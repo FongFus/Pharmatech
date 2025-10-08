@@ -1,79 +1,151 @@
-# 💊 Pharmatech
+# 💊 PharmaTech – AI-Powered E-Health Commerce Platform
 
-**Pharmatech** is a medical e-commerce platform integrated with the **Gemini 2.0 Flash AI chatbot**. It allows users to purchase pharmaceutical products, understand medical terminology, and receive basic health advice *(not a substitute for professional medical diagnosis)*.
+**PharmaTech** is an intelligent backend platform for pharmaceutical e-commerce, augmented by a **contextual health guidance chatbot** powered by **Gemini 2.0 Flash** and the **Retrieval-Augmented Generation (RAG)** mechanism.
 
-The platform includes user role management, product browsing, cart and order processing, secure payments, and real-time AI chatbot support. It is built with **Django**, **React Native**, and **Firebase** for a responsive and intelligent healthcare experience.
+PharmaTech bridges healthcare and AI by enabling customers to explore medical products, get real-time contextual answers, and make informed purchasing decisions — all while maintaining a strong ethical stance: _AI is advisory, not diagnostic_.
 
+---
 
+## 🧠 Academic Summary
 
-## 🚀 Features
+> **PharmaTech** (Django 5.2, Oct 2025) is a multi-role backend system embedding a **Retrieval-Augmented Generation (RAG)** chatbot into a pharmaceutical marketplace. Designed to enhance **accessibility**, **trust**, and **user-centric health guidance**, the system integrates:
+>
+> - A **Gemini 2.0 Flash** LLM for multimodal health queries (text, prescription images).
+> - A hybrid **RAG pipeline** with **ChromaDB**, **web scraping**, and **context-aware prompt engineering**.
+> - A layered architecture with role-specific access: customers, distributors, and admins.
+> - Real-time interaction via **WebSocket + Firebase Realtime DB**.
+>
+> The RAG pipeline follows a 3-stage methodology:
+>
+> 1. **Ingestion**: Asynchronous web scraping from trusted sources (e.g., WHO), Markdown parsing, and vector indexing (10,000 char cap).
+> 2. **Retrieval**: Top-K semantic search (k=2) using LlamaIndex + Gemini embedding, constrained to 4,000 chars with up to 4-turn memory.
+> 3. **Generation**: Prompting Gemini under ethical guardrails, no-diagnosis instruction, and fallback logic for out-of-domain queries.
+>
+> ⚠️ All chatbot responses are strictly informational and adhere to ethical LLM boundaries.
 
-### 🧑‍⚕️ Customer Features
-- **User Account**: Register, log in, and manage personal information.
-- **Product Management**: Search, filter, and view detailed product info.
-- **Cart & Orders**: Add items to cart, place orders, and make secure payments.
-- **AI Chatbot**: Ask questions and receive preliminary health guidance.
+---
 
-### 🏬 Distributor Features
-- **Account Management**: Register, log in, and update personal details.
-- **Product Management**: Add, edit, and delete products.
-- **Sales Tracking**: View revenue stats and best-selling products.
+## 🚀 Core Features
 
-### 🔐 Admin Features
-- **User Management**: Manage customers and distributors.
-- **Product Approval**: Approve or reject new products submitted by distributors.
-- **System Analytics**: View platform metrics like visits, orders, and chatbot usage.
+### 🧑‍⚕️ Customers
+- 🔐 Register, log in, manage profile
+- 🛍️ Browse and search approved products
+- 🛒 Add to cart, place orders, apply discounts
+- 💬 Real-time AI chatbot for medical guidance via WebSocket or REST
+- 📜 Ask things like:
+  - _"What is paracetamol used for?"_
+  - _"Is it safe to take vitamin C with antibiotics?"_
 
-
-
-## 🤖 AI Integration
-
-- **Gemini 2.0 Flash**: Real-time explanations of medical terms and health guidance using a multimodal Transformer model with Chain-of-Thought reasoning.
-- **Multimodal Support**: Accepts both text and images (e.g., prescription scans) to provide rich and contextual responses.
-
-
-
-## 🧱 Technology Stack
-
-| Layer | Technology |
-|-------|------------|
-| **Backend** | Django (Python), Django REST Framework, MySQL (local), PostgreSQL (Onrender) |
-| **Frontend** | React Native (Android & iOS) |
-| **AI** | Gemini 2.0 Flash via Firebase AI Logic SDK |
-| **Realtime** | Firebase Realtime Database |
-| **Deployment** | Backend deployed via Docker on Onrender |
-
-
-
-## 🧭 Architecture
-
-Pharmatech follows a **3-tier architecture**:
-
-1. **Presentation Layer**: React Native mobile app
-2. **Application Layer**: Django REST APIs with business logic and AI integration
-3. **Data Layer**: MySQL/PostgreSQL (structured data) + Firebase Realtime DB (real-time data)
-
-
-
-## 📦 Usage Scenarios
-
-### 👤 Customers
-- Register and log in
-- Browse and search products
-- Add to cart and complete orders
-- Ask AI chatbot:  
-  _"What does 'antibiotic' mean?"_  
-  _"Upload a prescription for analysis"_
-
-### 🛒 Distributors
-- Manage their product listings
-- Track performance and revenue
+### 🏬 Distributors
+- 🧾 Manage their own products and inventory
+- 📈 Track sales performance and top-selling items
+- 🚚 Handle bulk inventory operations
 
 ### 🛡️ Admins
-- Approve submitted products
-- Manage all users
-- View system reports and analytics
+- 🧑‍💼 Manage all users and their roles
+- ✅ Approve submitted products
+- 📊 Access system-wide analytics and chatbot usage
 
+---
 
+## 🧠 AI & RAG Architecture
 
-⚠️ **Disclaimer**: The AI chatbot in Pharmatech is intended for informational purposes only and does not replace professional medical consultation.
+| Layer         | Component                              |
+|--------------|------------------------------------------|
+| **LLM**       | Gemini 2.0 Flash (text + image capable) |
+| **RAG Flow**  | LlamaIndex + ChromaDB Vector Store      |
+| **Context**   | Web-scraped medical sources (Markdown)  |
+| **Embedding** | Gemini Embedding 001                    |
+| **Prompting** | Context-aware, instruction-guarded      |
+| **Heuristics**| Extracts top-3 sentences for clarity    |
+| **Storage**   | Firebase Realtime DB + Redis Channels   |
+| **Security**  | Role-based access, OAuth2, atomic DB ops|
+
+---
+
+## 📦 Tech Stack
+
+| Layer              | Technology                                      |
+|-------------------|--------------------------------------------------|
+| **Backend**        | Django 5.2, Django REST Framework               |
+| **AI / Vector DB** | Gemini API, ChromaDB, LlamaIndex                |
+| **Database**       | MySQL (dev) / PostgreSQL (prod), Firebase       |
+| **Realtime**       | Django Channels, Firebase Realtime DB          |
+| **Notifications**  | Firebase Cloud Messaging (FCM)                 |
+| **Payment**        | Stripe Checkout                                 |
+| **Frontend**       | React Native (Android/iOS)                      |
+| **DevOps**         | Docker, Render.com                              |
+
+---
+
+## 💬 Realtime Chatbot API
+
+- 🌐 **WebSocket**: `ws/chat/<conversation_id>/`
+- 💡 Supports:
+  - Contextual recall of past 4 messages
+  - Chat history stored per-user in Firebase
+- 🧠 Prompts are enriched with vector-retrieved medical content before Gemini generation
+
+---
+
+## 📈 System Analytics (Admin)
+
+- Total users, revenue, order count
+- Product approval queue
+- Chatbot interaction volume
+- Trending products & categories
+
+---
+
+## 🧪 Sample User Flows
+
+### Ask about a drug  
+_User_: “What is ibuprofen?”  
+🤖 AI: _“Ibuprofen is a non-steroidal anti-inflammatory drug used to reduce fever and relieve pain...”_
+
+---
+
+## 🧭 System Architecture
+
+```text
+📱 Mobile App (React Native)
+        │
+        ▼
+🔐 OAuth2 Auth Layer
+        │
+        ▼
+🧩 Django Backend — REST + WebSocket (Channels)
+        │
+        ├─ 🧠 Gemini Chatbot (LLM API)
+        ├─ 🔎 Vector Retrieval (ChromaDB, LlamaIndex)
+        ├─ 🔔 Notifications (FCM)
+        ├─ 💳 Payment (Stripe)
+        └─ 🗃️ Database (PostgreSQL + Firebase)
+```
+
+---
+
+## 📜 Deployment
+
+- **Backend**: Dockerized + Deployed on Render.com
+- **Frontend**: React Native Expo (iOS & Android)
+- **Realtime**: Firebase Realtime DB, Redis (Channels Layer)
+- **Tasks**: Celery for background scraping & email jobs
+
+---
+
+## ⚠️ Ethical Disclaimer
+
+PharmaTech is **not a diagnostic tool**. All AI chatbot responses are informational and should **never** replace professional medical advice or clinical consultation.
+
+---
+
+## 🌱 Future Directions
+
+- Federated learning for personalized embeddings
+- Enhanced multimodal input (prescription OCR)
+- Expansion to other medical verticals (teleconsultation)
+
+---
+  
+_Developed by Nguyen Phong Phu._
