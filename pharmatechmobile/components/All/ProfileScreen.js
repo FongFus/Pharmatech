@@ -39,19 +39,19 @@ const ProfileScreen = ({ navigation }) => {
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [editFullName, setEditFullName] = useState(user?.full_name || '');
-  const [editEmail, setEditEmail] = useState(user?.email || '');
-  const [editPhone, setEditPhone] = useState(user?.phone || '');
-  const [editAddress, setEditAddress] = useState(user?.address || '');
+  const [editFullName, setEditFullName] = useState(user?.user?.full_name || '');
+  const [editEmail, setEditEmail] = useState(user?.user?.email || '');
+  const [editPhone, setEditPhone] = useState(user?.user?.phone || '');
+  const [editAddress, setEditAddress] = useState(user?.user?.address || '');
   const [selectedImage, setSelectedImage] = useState(null);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
 
   useEffect(() => {
     if (user) {
-      setEditFullName(user.full_name || '');
-      setEditEmail(user.email || '');
-      setEditPhone(user.phone || '');
-      setEditAddress(user.address || '');
+      setEditFullName(user.user?.full_name || '');
+      setEditEmail(user.user?.email || '');
+      setEditPhone(user.user?.phone || '');
+      setEditAddress(user.user?.address || '');
       fetchUserStats();
     }
   }, [user]);
@@ -106,7 +106,7 @@ const ProfileScreen = ({ navigation }) => {
     const token = await AsyncStorage.getItem('token');
     const authApi = authApis(token);
     try {
-      const updatedUser = await authApi.put(endpoints.usersUpdate(user.id), {
+      const updatedUser = await authApi.put(endpoints.usersUpdate(user.user?.id), {
         full_name: editFullName,
         email: editEmail,
         phone: editPhone,
@@ -152,7 +152,7 @@ const ProfileScreen = ({ navigation }) => {
       type: 'image/jpeg',
     });
     try {
-      const updatedUser = await authApi.put(endpoints.usersUpdate(user.id), formData, {
+      const updatedUser = await authApi.put(endpoints.usersUpdate(user.user?.id), formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       dispatch({ type: 'update_user', payload: updatedUser });
@@ -202,10 +202,10 @@ const ProfileScreen = ({ navigation }) => {
         </View>
         <View style={styles.avatarContainer}>
           <TouchableOpacity onPress={handleUploadAvatar}>
-            {user?.avatar ? (
-              <Image source={{ uri: user.avatar }} style={styles.avatar} />
+            {user?.user?.avatar ? (
+              <Image source={{ uri: user.user.avatar }} style={styles.avatar} />
             ) : (
-              <Avatar.Text size={80} label={user?.full_name?.[0]?.toUpperCase() || ''} />
+              <Avatar.Text size={80} label={user?.user?.full_name?.[0]?.toUpperCase() || ''} />
             )}
             <View style={styles.editAvatarOverlay}>
               <MaterialIcons name="camera-alt" size={20} color={colors.white} />
@@ -215,9 +215,9 @@ const ProfileScreen = ({ navigation }) => {
         <Title style={styles.header}>Hồ sơ</Title>
         <Card style={styles.card}>
           <Card.Content>
-            <Text style={styles.detail}>Tên: {user.full_name}</Text>
-            <Text style={styles.detail}>Email: {user.email}</Text>
-            <Text style={styles.detail}>Vai trò: {user.role}</Text>
+            <Text style={styles.detail}>Tên: {user.user?.full_name}</Text>
+            <Text style={styles.detail}>Email: {user.user?.email}</Text>
+            <Text style={styles.detail}>Vai trò: {user.user?.role}</Text>
             <Text style={styles.detail}>Thông báo chưa đọc: {unreadNotifications}</Text>
           </Card.Content>
         </Card>
