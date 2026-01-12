@@ -138,6 +138,5 @@ PharmaTech is **not a diagnostic tool**. All AI chatbot responses are informatio
 - Enhanced multimodal input (prescription OCR)
 - Expansion to other medical verticals (teleconsultation)
 
----
   
 _Developed by Nguyen Phong Phu._
